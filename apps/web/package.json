@@ -1,0 +1,51 @@
+{
+  "name": "@housetour/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 3000",
+    "build": "next build",
+    "start": "next start --port 3000",
+    "lint": "next lint",
+    "test": "node --import tsx --test src/**/*.test.ts",
+    "generate-demo-assets": "tsx scripts/generate-demo-assets.ts"
+  },
+  "dependencies": {
+    "@auth/prisma-adapter": "^2.9.0",
+    "@aws-sdk/client-s3": "^3.800.0",
+    "@aws-sdk/s3-request-presigner": "^3.800.0",
+    "@housetour/api-contract": "workspace:*",
+    "@housetour/db": "workspace:*",
+    "@housetour/pipeline": "workspace:*",
+    "@housetour/tour-engine": "workspace:*",
+    "@react-three/drei": "^10.0.0",
+    "@react-three/fiber": "^9.1.0",
+    "@react-three/xr": "^6.6.0",
+    "bcryptjs": "^3.0.2",
+    "bullmq": "^5.49.0",
+    "clsx": "^2.1.1",
+    "ioredis": "^5.6.0",
+    "next": "^15.3.0",
+    "next-auth": "^4.24.11",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "sharp": "^0.34.0",
+    "stripe": "^18.0.0",
+    "three": "^0.175.0",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^22.15.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@types/three": "^0.175.0",
+    "autoprefixer": "^10.4.21",
+    "eslint": "^9.25.0",
+    "eslint-config-next": "^15.3.0",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.4.17",
+    "tsx": "^4.19.0",
+    "typescript": "^5.8.0"
+  }
+}

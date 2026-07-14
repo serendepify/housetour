@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Rollback HouseTour web (+ optional worker) to a previous image tag.
+# Usage: bin/rollback [tag]
+# Default tag: bootstrap (or previous SHA you pin)
+set -euo pipefail
+
+TAG="${1:-bootstrap}"
+SSH_KEY="${SSH_KEY:-$HOME/.ssh/optimi_github_actions}"
+VPS_HOST="${VPS_HOST:?Set VPS_HOST}"
+VPS_USER="${VPS_USER:-root}"
+IMAGE_NS="${IMAGE_NS:-ghcr.io/serendepify/housetour}"
+
+ssh -i "$SSH_KEY" "${VPS_USER}@${VPS_HOST}" bash -se <<EOF
+set -euo pipefail
+cd /opt/housetour
+export WEB_IMAGE="${IMAGE_NS}:${TAG}"
+export WORKER_IMAGE="${IMAGE_NS}-worker:${TAG}"
+echo "[rollback] WEB_IMAGE=\${WEB_IMAGE}"
+docker pull "\${WEB_IMAGE}" || true
+docker pull "\${WORKER_IMAGE}" || true
+docker compose up -d --no-deps --force-recreate web worker
+docker compose ps
+EOF

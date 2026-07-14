@@ -1,0 +1,32 @@
+# HouseTour BullMQ worker (pano + photogrammetry pipeline)
+FROM node:22-bookworm-slim AS base
+WORKDIR /app
+RUN corepack enable && apt-get update \
+  && apt-get install -y --no-install-recommends openssl ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+FROM base AS deps
+COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY apps/worker/package.json apps/worker/
+COPY packages/db/package.json packages/db/
+COPY packages/api-contract/package.json packages/api-contract/
+COPY packages/tour-engine/package.json packages/tour-engine/
+COPY packages/pipeline/package.json packages/pipeline/
+RUN pnpm install --frozen-lockfile || pnpm install
+
+FROM base AS runner
+COPY --from=deps /app/node_modules ./node_modules
+COPY --from=deps /app/apps ./apps
+COPY --from=deps /app/packages ./packages
+COPY --from=deps /app/package.json /app/pnpm-workspace.yaml /app/pnpm-lock.yaml ./
+COPY . .
+RUN pnpm --filter @housetour/db generate
+
+ENV NODE_ENV=production
+ENV TOUR_DERIVED_PUBLIC_DIR=/data/derived
+
+LABEL org.opencontainers.image.source="https://github.com/serendepify/housetour"
+LABEL org.opencontainers.image.title="HouseTour Worker"
+
+VOLUME ["/data/derived"]
+CMD ["pnpm", "--filter", "@housetour/worker", "dev"]

@@ -1,0 +1,98 @@
+# Production-style compose for VPS (/opt/housetour/docker-compose.yml)
+# Images from GHCR; never built on the VPS.
+# Secrets via /opt/housetour/.env (not committed).
+
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: housetour-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: housetour
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: housetour
+    volumes:
+      - housetour-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U housetour -d housetour"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    ports:
+      - "127.0.0.1:${DB_HOST_PORT:-15432}:5432"
+    networks:
+      - housetour
+
+  redis:
+    image: redis:7-alpine
+    container_name: housetour-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - housetour-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    networks:
+      - housetour
+
+  minio:
+    image: minio/minio:latest
+    container_name: housetour-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-housetour}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-housetoursecret}
+    volumes:
+      - housetour-minio-data:/data
+    ports:
+      - "127.0.0.1:${MINIO_HOST_PORT:-19000}:9000"
+    networks:
+      - housetour
+
+  web:
+    image: ${WEB_IMAGE:-ghcr.io/serendepify/housetour:latest}
+    container_name: housetour-web
+    restart: unless-stopped
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${HOST_PORT:-13000}:3000"
+    networks:
+      - housetour
+
+  worker:
+    image: ${WORKER_IMAGE:-ghcr.io/serendepify/housetour-worker:latest}
+    container_name: housetour-worker
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      TOUR_DERIVED_PUBLIC_DIR: /data/derived
+    volumes:
+      - housetour-derived:/data/derived
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - housetour
+
+volumes:
+  housetour-pg-data:
+  housetour-redis-data:
+  housetour-minio-data:
+  housetour-derived:
+
+networks:
+  housetour:
+    name: housetour

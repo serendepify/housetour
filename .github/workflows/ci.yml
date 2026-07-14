@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Install · generate · test · build
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: housetour
+          POSTGRES_PASSWORD: housetour
+          POSTGRES_DB: housetour
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U housetour -d housetour"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://housetour:housetour@localhost:5432/housetour?schema=public
+      AUTH_SECRET: ci-secret-at-least-32-characters-long
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      NEXTAUTH_URL: http://localhost:3000
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.12.1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile || pnpm install
+
+      - name: Generate Prisma client
+        run: pnpm db:generate
+
+      - name: Migrate
+        run: pnpm --filter @housetour/db exec prisma migrate deploy
+
+      - name: Unit tests
+        run: pnpm test
+
+      - name: Build packages + web
+        run: |
+          pnpm --filter @housetour/api-contract build
+          pnpm --filter @housetour/tour-engine build
+          pnpm --filter @housetour/pipeline build
+          pnpm --filter @housetour/db build
+          pnpm --filter @housetour/web build

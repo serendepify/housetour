@@ -1,0 +1,13 @@
+# Drop into /etc/caddy/sites/50-housetour.caddy (or include from main Caddyfile).
+# Replace DOMAIN and HOST_PORT with your values.
+
+housetour.example.com {
+	encode gzip zstd
+	reverse_proxy 127.0.0.1:13000
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+}

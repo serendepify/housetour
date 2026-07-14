@@ -1,0 +1,370 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum MemberRole {
+  OWNER
+  ADMIN
+  AGENT
+  PHOTOGRAPHER
+}
+
+enum TourStatus {
+  DRAFT
+  UPLOADING
+  PROCESSING
+  READY
+  FAILED
+  ARCHIVED
+}
+
+enum AssetKind {
+  PANO
+  FLOOR_PLAN
+  MESH_GLB
+  COVER
+  POSTER
+  MANIFEST
+  MULTI_VIEW
+  POINT_CLOUD
+  DEPTH_MAP
+  OTHER
+}
+
+enum SceneKind {
+  PANO
+  MESH
+}
+
+enum JobStatus {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+enum AnalyticsEventType {
+  VIEW
+  SCENE_ENTER
+  HOTSPOT_CLICK
+  DWELL
+  LEAD
+  VR_ENTER
+}
+
+model User {
+  id           String       @id @default(uuid()) @db.Uuid
+  email        String       @unique
+  name         String?
+  passwordHash String?
+  image        String?
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  memberships  Membership[]
+  toursCreated Tour[]       @relation("TourCreator")
+  accounts     Account[]
+  sessions     Session[]
+}
+
+model Account {
+  id                String  @id @default(uuid()) @db.Uuid
+  userId            String  @db.Uuid
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(uuid()) @db.Uuid
+  sessionToken String   @unique
+  userId       String   @db.Uuid
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model Organization {
+  id               String         @id @default(uuid()) @db.Uuid
+  name             String
+  slug             String         @unique
+  logoUrl          String?
+  primaryColor     String         @default("#C4A35A")
+  ctaLabel         String?
+  ctaUrl           String?
+  storageUsedBytes BigInt         @default(0)
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  memberships      Membership[]
+  properties       Property[]
+  tours            Tour[]
+  subscription     Subscription?
+  invites          Invite[]
+  usageRecords     UsageRecord[]
+}
+
+model Membership {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  userId         String       @db.Uuid
+  role           MemberRole   @default(AGENT)
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+model Plan {
+  id                        String         @id @default(uuid()) @db.Uuid
+  code                      String         @unique
+  name                      String
+  description               String?
+  priceMonthly              Decimal        @db.Decimal(10, 2)
+  maxActiveTours            Int
+  maxStorageBytes           BigInt
+  maxSeats                  Int
+  allowBranding             Boolean        @default(false)
+  allowApi                  Boolean        @default(false)
+  allowPhotogrammetry       Boolean        @default(false)
+  processingMinutesIncluded Int            @default(60)
+  stripeProductId           String?
+  stripePriceId             String?
+  sortOrder                 Int            @default(0)
+  active                    Boolean        @default(true)
+  subscriptions             Subscription[]
+}
+
+model Subscription {
+  id                   String       @id @default(uuid()) @db.Uuid
+  organizationId       String       @unique @db.Uuid
+  planId               String       @db.Uuid
+  status               String       @default("active")
+  stripeCustomerId     String?
+  stripeSubscriptionId String?
+  currentPeriodEnd     DateTime?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+  organization         Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  plan                 Plan         @relation(fields: [planId], references: [id])
+}
+
+model Invite {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  email          String
+  role           MemberRole   @default(AGENT)
+  token          String       @unique
+  expiresAt      DateTime
+  acceptedAt     DateTime?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, email])
+}
+
+model Property {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  title          String
+  addressLine1   String?
+  city           String?
+  region         String?
+  postalCode     String?
+  country        String?
+  bedrooms       Int?
+  bathrooms      Decimal?     @db.Decimal(4, 1)
+  sqft           Int?
+  listPrice      Decimal?     @db.Decimal(12, 2)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  tours          Tour[]
+
+  @@index([organizationId])
+}
+
+model Tour {
+  id              String           @id @default(uuid()) @db.Uuid
+  organizationId  String           @db.Uuid
+  propertyId      String?          @db.Uuid
+  createdById     String?          @db.Uuid
+  title           String
+  description     String?
+  slug            String
+  status          TourStatus       @default(DRAFT)
+  published       Boolean          @default(false)
+  allowVr         Boolean          @default(true)
+  allowEmbed      Boolean          @default(true)
+  showFloorPlan   Boolean          @default(true)
+  passwordHash    String?
+  coverUrl        String?
+  startSceneId    String?          @db.Uuid
+  failureReason   String?
+  viewCount       Int              @default(0)
+  archivedAt      DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  property        Property?        @relation(fields: [propertyId], references: [id], onDelete: SetNull)
+  createdBy       User?            @relation("TourCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  floors          Floor[]
+  scenes          TourScene[]
+  assets          TourAsset[]
+  jobs            ProcessingJob[]
+  analyticsEvents AnalyticsEvent[]
+
+  @@unique([organizationId, slug])
+  @@index([slug])
+  @@index([organizationId, status])
+  @@index([published, status])
+}
+
+model Floor {
+  id             String     @id @default(uuid()) @db.Uuid
+  tourId         String     @db.Uuid
+  name           String
+  sortOrder      Int        @default(0)
+  planImageKey   String?
+  planImageUrl   String?
+  metersPerPixel Float?
+  createdAt      DateTime   @default(now())
+  tour           Tour       @relation(fields: [tourId], references: [id], onDelete: Cascade)
+  scenes         TourScene[]
+
+  @@index([tourId])
+}
+
+model TourScene {
+  id           String    @id @default(uuid()) @db.Uuid
+  tourId       String    @db.Uuid
+  floorId      String?   @db.Uuid
+  name         String
+  kind         SceneKind @default(PANO)
+  sortOrder    Int       @default(0)
+  mediaKey     String?
+  mediaUrl     String?
+  posterUrl    String?
+  posX         Float?
+  posY         Float?
+  posZ         Float?
+  initialYaw   Float     @default(0)
+  initialPitch Float     @default(0)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  tour         Tour      @relation(fields: [tourId], references: [id], onDelete: Cascade)
+  floor        Floor?    @relation(fields: [floorId], references: [id], onDelete: SetNull)
+  hotspots     Hotspot[] @relation("FromScene")
+
+  @@index([tourId, sortOrder])
+}
+
+model Hotspot {
+  id            String    @id @default(uuid()) @db.Uuid
+  fromSceneId   String    @db.Uuid
+  targetSceneId String    @db.Uuid
+  label         String?
+  yaw           Float
+  pitch         Float     @default(0)
+  createdAt     DateTime  @default(now())
+  fromScene     TourScene @relation("FromScene", fields: [fromSceneId], references: [id], onDelete: Cascade)
+
+  @@index([fromSceneId])
+  @@index([targetSceneId])
+}
+
+model TourAsset {
+  id           String    @id @default(uuid()) @db.Uuid
+  tourId       String    @db.Uuid
+  kind         AssetKind
+  filename     String
+  contentType  String
+  sizeBytes    BigInt    @default(0)
+  storageKey   String
+  publicUrl    String?
+  sortOrder    Int       @default(0)
+  meta         Json?
+  createdAt    DateTime  @default(now())
+  tour         Tour      @relation(fields: [tourId], references: [id], onDelete: Cascade)
+
+  @@index([tourId, kind])
+}
+
+model ProcessingJob {
+  id          String    @id @default(uuid()) @db.Uuid
+  tourId      String    @db.Uuid
+  type        String    @default("tour.process")
+  status      JobStatus @default(QUEUED)
+  progress    Int       @default(0)
+  error       String?
+  result      Json?
+  bullJobId   String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  startedAt   DateTime?
+  finishedAt  DateTime?
+  tour        Tour      @relation(fields: [tourId], references: [id], onDelete: Cascade)
+
+  @@index([tourId, status])
+}
+
+model AnalyticsEvent {
+  id        String             @id @default(uuid()) @db.Uuid
+  tourId    String             @db.Uuid
+  type      AnalyticsEventType
+  sceneId   String?
+  meta      Json?
+  sessionId String?
+  userAgent String?
+  createdAt DateTime           @default(now())
+  tour      Tour               @relation(fields: [tourId], references: [id], onDelete: Cascade)
+
+  @@index([tourId, type, createdAt])
+}
+
+enum UsageKind {
+  PROCESS_MINUTES
+  PHOTOGRAMMETRY_MINUTES
+  STORAGE_GB_MONTH
+  TOUR_PUBLISH
+}
+
+model UsageRecord {
+  id             String       @id @default(uuid()) @db.Uuid
+  organizationId String       @db.Uuid
+  tourId         String?      @db.Uuid
+  kind           UsageKind
+  quantity       Int          @default(1)
+  meta           Json?
+  stripeMeterId  String?
+  reportedAt     DateTime?
+  createdAt      DateTime     @default(now())
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, kind, createdAt])
+  @@index([tourId])
+}

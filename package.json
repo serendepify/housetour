@@ -1,0 +1,34 @@
+{
+  "name": "housetour",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.12.1",
+  "scripts": {
+    "dev": "pnpm --parallel --filter @housetour/web --filter @housetour/worker dev",
+    "dev:web": "pnpm --filter @housetour/web dev",
+    "dev:worker": "pnpm --filter @housetour/worker dev",
+    "build": "pnpm --filter @housetour/db build && pnpm --filter @housetour/api-contract build && pnpm --filter @housetour/tour-engine build && pnpm --filter @housetour/pipeline build && pnpm --filter @housetour/web build && pnpm --filter @housetour/worker build",
+    "db:generate": "pnpm --filter @housetour/db generate",
+    "db:migrate": "pnpm --filter @housetour/db migrate",
+    "db:seed": "pnpm --filter @housetour/db seed",
+    "db:setup": "pnpm db:generate && pnpm db:migrate && pnpm db:seed",
+    "lint": "pnpm --filter @housetour/web lint",
+    "test": "pnpm --filter @housetour/db exec node --import tsx --test ../../packages/tour-engine/src/index.test.ts",
+    "docker:up": "docker compose up -d",
+    "docker:down": "docker compose down",
+    "setup": "pnpm install && pnpm docker:up && sleep 3 && pnpm db:setup"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/engines",
+      "prisma",
+      "sharp",
+      "esbuild",
+      "msgpackr-extract",
+      "unrs-resolver"
+    ]
+  }
+}

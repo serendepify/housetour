@@ -1,0 +1,72 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: housetour-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: housetour
+      POSTGRES_PASSWORD: housetour
+      POSTGRES_DB: housetour
+    ports:
+      - "5432:5432"
+    volumes:
+      - housetour_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U housetour -d housetour"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: housetour-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - housetour_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: housetour-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: housetour
+      MINIO_ROOT_PASSWORD: housetoursecret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - housetour_minio:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  minio-init:
+    image: minio/mc:latest
+    container_name: housetour-minio-init
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: >
+      /bin/sh -c "
+      sleep 3;
+      mc alias set local http://minio:9000 housetour housetoursecret;
+      mc mb -p local/housetour || true;
+      mc anonymous set download local/housetour/public || true;
+      exit 0;
+      "
+
+volumes:
+  housetour_pg:
+  housetour_redis:
+  housetour_minio:
