@@ -162,16 +162,26 @@ function MeshWalkRoom({ url }: { url: string }) {
   );
 }
 
+function CameraTracker({ onYaw }: { onYaw: (yaw: number) => void }) {
+  useFrame(({ camera }) => {
+    // camera.rotation.order is 'YXZ' by default in R3F
+    onYaw(camera.rotation.y);
+  });
+  return null;
+}
+
 function TourScene({
   manifest,
   sceneId,
   onNavigate,
   primaryColor,
+  onCameraYaw,
 }: {
   manifest: TourManifest;
   sceneId: string;
   onNavigate: (id: string) => void;
   primaryColor: string;
+  onCameraYaw?: (yaw: number) => void;
 }) {
   const scene = manifest.scenes.find((s) => s.id === sceneId);
   if (!scene || !scene.mediaUrl) {
@@ -192,6 +202,7 @@ function TourScene({
   return (
     <>
       <ambientLight intensity={isMesh ? 0.85 : 0.6} />
+      <CameraTracker onYaw={onCameraYaw ?? (() => {})} />
       {isMesh ? (
         <>
           <directionalLight position={[6, 10, 4]} intensity={1.1} />
@@ -298,11 +309,96 @@ export function TourViewer({
   const [pendingScene, setPendingScene] = useState<string | null>(null);
   const [vrSupported, setVrSupported] = useState(false);
   const [infoOpen, setInfoOpen] = useState(mode !== "embed");
+  const [walkTarget, setWalkTarget] = useState<{ x: number; y: number } | null>(null);
+  const cameraYawRef = useRef(0);
   const primary = manifest.branding?.primaryColor || "#C4A35A";
 
   const scene = useMemo(
     () => manifest.scenes.find((s) => s.id === sceneId),
     [manifest.scenes, sceneId],
+  );
+
+  const navigate = useCallback(
+    (nextId: string) => {
+      if (nextId === sceneId || fading) return;
+      setPendingScene(nextId);
+      setFading(true);
+    },
+    [sceneId, fading],
+  );
+
+  const sceneMap = useMemo(() => {
+    const m = new Map<string, (typeof manifest.scenes)[number]>();
+    for (const s of manifest.scenes) m.set(s.id, s);
+    return m;
+  }, [manifest.scenes]);
+
+  // Find the hotspot closest to a given yaw angle
+  const findHotspotAtAngle = useCallback(
+    (targetYaw: number): { sceneId: string; label?: string | null } | null => {
+      if (!scene) return null;
+      const hotspots = scene.hotspots;
+      if (hotspots.length === 0) return null;
+      // Normalize target to [0, 2π)
+      const norm = ((targetYaw % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+      let best: (typeof hotspots)[number] | null = null;
+      let bestDist = Infinity;
+      for (const h of hotspots) {
+        const hNorm = ((h.yaw % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+        let diff = Math.abs(hNorm - norm);
+        if (diff > Math.PI) diff = Math.PI * 2 - diff;
+        if (diff < bestDist) {
+          bestDist = diff;
+          best = h;
+        }
+      }
+      // Only navigate if hotspot is within ~60° of target
+      if (best && bestDist < Math.PI / 3) {
+        return { sceneId: best.targetSceneId, label: best.label };
+      }
+      return null;
+    },
+    [scene],
+  );
+
+  // Camera yaw tracker — runs inside Canvas via TourScene
+  const setCameraYaw = useCallback((yaw: number) => {
+    cameraYawRef.current = yaw;
+  }, []);
+
+  // Directional walk: find hotspot at given angle offset from current yaw
+  const walkToward = useCallback(
+    (angleOffset: number) => {
+      if (!scene || fading) return;
+      const yaw = cameraYawRef.current + angleOffset;
+      const target = findHotspotAtAngle(yaw);
+      if (target) navigate(target.sceneId);
+    },
+    [scene, fading, findHotspotAtAngle, navigate],
+  );
+
+  // Floor click handler: determine click position and walk forward if on lower half
+  const handleCanvasClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!scene || fading) return;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const x = (e.clientX - rect.left) / rect.width;
+      const y = (e.clientY - rect.top) / rect.height;
+
+      // Only respond to clicks on the lower 40% (floor area)
+      if (y < 0.6) return;
+
+      // Show walk indicator
+      setWalkTarget({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+      setTimeout(() => setWalkTarget(null), 600);
+
+      // Map x position to yaw angle (0 = left edge = -π, 1 = right edge = +π)
+      // In equirectangular: x=0 is -π, x=0.5 is 0 (center/forward), x=1 is +π
+      const clickYaw = (x - 0.5) * Math.PI * 2;
+      const target = findHotspotAtAngle(clickYaw);
+      if (target) navigate(target.sceneId);
+    },
+    [scene, fading, findHotspotAtAngle, navigate],
   );
 
   useEffect(() => {
@@ -322,15 +418,6 @@ export function TourViewer({
     if (sceneId) onSceneChange?.(sceneId);
   }, [sceneId, onSceneChange]);
 
-  const navigate = useCallback(
-    (nextId: string) => {
-      if (nextId === sceneId || fading) return;
-      setPendingScene(nextId);
-      setFading(true);
-    },
-    [sceneId, fading],
-  );
-
   const finishFade = useCallback(() => {
     if (pendingScene) {
       setSceneId(pendingScene);
@@ -341,27 +428,44 @@ export function TourViewer({
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!scene) return;
-      if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") {
-        const next = scene.hotspots[0];
-        if (next) navigate(next.targetSceneId);
+      if (!scene || fading) return;
+      // W / ArrowUp → walk forward (toward center of view)
+      if (e.key === "ArrowUp" || e.key === "w" || e.key === "W") {
+        e.preventDefault();
+        walkToward(0);
+        return;
       }
+      // S / ArrowDown → walk backward (opposite direction)
+      if (e.key === "ArrowDown" || e.key === "s" || e.key === "S") {
+        e.preventDefault();
+        walkToward(Math.PI);
+        return;
+      }
+      // D / ArrowRight → walk right
+      if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") {
+        e.preventDefault();
+        walkToward(Math.PI / 2);
+        return;
+      }
+      // A / ArrowLeft → walk left
       if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") {
-        const prev = scene.hotspots.find((h) =>
-          h.label?.toLowerCase().includes("back"),
-        ) ?? scene.hotspots[scene.hotspots.length - 1];
-        if (prev) navigate(prev.targetSceneId);
+        e.preventDefault();
+        walkToward(-Math.PI / 2);
+        return;
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [scene, navigate]);
+  }, [scene, fading, walkToward]);
 
   const price = formatListPrice(manifest.property?.listPrice);
   const floor = manifest.floors[0];
 
   return (
-    <div className={`relative h-full w-full overflow-hidden bg-ink-950 ${className ?? ""}`}>
+    <div
+      className={`relative h-full w-full overflow-hidden bg-ink-950 ${className ?? ""}`}
+      onClick={handleCanvasClick}
+    >
       <Canvas
         camera={{
           position:
@@ -381,6 +485,7 @@ export function TourViewer({
               sceneId={sceneId}
               onNavigate={navigate}
               primaryColor={primary}
+              onCameraYaw={setCameraYaw}
             />
           ) : null}
           <FadeController fading={fading} onDone={finishFade} />
@@ -391,6 +496,19 @@ export function TourViewer({
         className="pointer-events-none absolute inset-0 bg-black transition-opacity duration-300"
         style={{ opacity: fading ? 0.55 : 0 }}
       />
+
+      {/* Walk indicator — ripple at click position */}
+      {walkTarget ? (
+        <div
+          className="pointer-events-none absolute z-20"
+          style={{ left: walkTarget.x, top: walkTarget.y }}
+        >
+          <div className="absolute -translate-x-1/2 -translate-y-1/2">
+            <div className="h-3 w-3 animate-ping rounded-full bg-gold-500/60" />
+            <div className="absolute left-1/2 top-1/2 h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-gold-300" />
+          </div>
+        </div>
+      ) : null}
 
       {/* Top bar */}
       <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between p-4 md:p-6">
@@ -536,7 +654,7 @@ export function TourViewer({
           <p className="text-center text-[10px] uppercase tracking-[0.18em] text-white/40">
             {scene?.kind === "mesh"
               ? "Orbit mesh · Scroll zoom · Click markers to return to panoramas"
-              : "Drag to look · Click gold markers or arrow keys to walk · Continuous multi-point tour"}
+              : "Drag to look · Click floor or press WASD/arrows to walk · Click markers to jump"}
           </p>
         </div>
       </div>
