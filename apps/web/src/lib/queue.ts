@@ -1,23 +1,21 @@
 import { Queue } from "bullmq";
-import IORedis from "ioredis";
 import { env } from "./env";
 
-let connection: IORedis | null = null;
 let tourQueue: Queue | null = null;
-
-export function getRedis(): IORedis {
-  if (!connection) {
-    connection = new IORedis(env.redisUrl, { maxRetriesPerRequest: null });
-  }
-  return connection;
-}
 
 export function getTourQueue(): Queue {
   if (!tourQueue) {
-    // Cast: pnpm may hoist two ioredis majors; runtime is fine
+    const redisUrl = new URL(env.redisUrl);
     tourQueue = new Queue("tour-process", {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      connection: getRedis() as any,
+      connection: {
+        host: redisUrl.hostname,
+        port: Number(redisUrl.port || 6379),
+        username: redisUrl.username || undefined,
+        password: redisUrl.password || undefined,
+        db: Number(redisUrl.pathname.slice(1) || 0),
+        tls: redisUrl.protocol === "rediss:" ? {} : undefined,
+        maxRetriesPerRequest: null,
+      },
     });
   }
   return tourQueue;
@@ -27,11 +25,12 @@ export async function enqueueTourProcess(
   jobId: string,
   tourId: string,
   mode: "pano" | "photogrammetry" = "pano",
+  captureSessionId?: string,
 ) {
   const queue = getTourQueue();
   const job = await queue.add(
     mode === "photogrammetry" ? "photogrammetry" : "process",
-    { jobId, tourId, mode },
+    { jobId, tourId, mode, captureSessionId },
     {
       jobId,
       attempts: 3,

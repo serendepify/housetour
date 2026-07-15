@@ -91,11 +91,11 @@ export async function runColmapReconstruction(workDir: string): Promise<{
   log.push("feature_extractor done");
 
   await run(det.binary, [
-    "exhaustive_matcher",
+    imgCount >= 12 ? "sequential_matcher" : "exhaustive_matcher",
     "--database_path",
     database,
   ], workDir);
-  log.push("exhaustive_matcher done");
+  log.push(`${imgCount >= 12 ? "sequential" : "exhaustive"}_matcher done`);
 
   await run(det.binary, [
     "mapper",

@@ -3,10 +3,10 @@ export const PIPELINE_STAGES = [
   { id: "features", label: "Feature extraction", weight: 14 },
   { id: "match", label: "Image matching", weight: 14 },
   { id: "sparse", label: "Sparse reconstruction", weight: 16 },
-  { id: "dense", label: "Dense depth / point cloud", weight: 16 },
-  { id: "mesh", label: "Mesh + texture bake", weight: 14 },
-  { id: "nav", label: "Nav graph + walk hotspots", weight: 10 },
-  { id: "publish", label: "Publish manifest", weight: 8 },
+  { id: "dense", label: "Spatial depth solve", weight: 16 },
+  { id: "mesh", label: "Visual + navigation asset", weight: 14 },
+  { id: "nav", label: "Connect room walkthrough", weight: 10 },
+  { id: "publish", label: "Prepare viewer", weight: 8 },
 ] as const;
 
 export type StageId = (typeof PIPELINE_STAGES)[number]["id"];

@@ -52,6 +52,9 @@ importers:
       ioredis:
         specifier: ^5.6.0
         version: 5.11.1
+      lucide-react:
+        specifier: ^1.24.0
+        version: 1.24.0(react@19.2.7)
       next:
         specifier: ^15.3.0
         version: 15.5.20(react-dom@19.2.7(react@19.2.7))(react@19.2.7)
@@ -131,19 +134,16 @@ importers:
       bullmq:
         specifier: ^5.49.0
         version: 5.80.2
-      ioredis:
-        specifier: ^5.6.0
-        version: 5.11.1
       sharp:
         specifier: ^0.34.0
         version: 0.34.5
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.1
     devDependencies:
       '@types/node':
         specifier: ^22.15.0
         version: 22.20.1
-      tsx:
-        specifier: ^4.19.0
-        version: 4.23.1
       typescript:
         specifier: ^5.8.0
         version: 5.9.3
@@ -197,6 +197,9 @@ importers:
 
   packages/pipeline:
     dependencies:
+      '@aws-sdk/client-s3':
+        specifier: ^3.1086.0
+        version: 3.1086.0
       '@housetour/db':
         specifier: workspace:*
         version: link:../db
@@ -2361,6 +2364,11 @@ packages:
   lru.min@1.1.4:
     resolution: {integrity: sha512-DqC6n3QQ77zdFpCMASA1a3Jlb64Hv2N2DciFGkO/4L9+q/IpIAuRlKOvCXabtRW6cQf8usbmM6BE/TOPysCdIA==}
     engines: {bun: '>=1.0.0', deno: '>=1.30.0', node: '>=8.0.0'}
+
+  lucide-react@1.24.0:
+    resolution: {integrity: sha512-YT6mBD8lGKkg4nM39enlm94/sfJIiW0YKUT60fBy4YK8tai31ylg1VhGNWxkpSKHo9UagfnZqwIff3HTDQwXeA==}
+    peerDependencies:
+      react: ^16.5.1 || ^17.0.0 || ^18.0.0 || ^19.0.0
 
   luxon@3.7.2:
     resolution: {integrity: sha512-vtEhXh/gNjI9Yg1u4jX/0YVPMvxzHuGgCm6tC5kZyb08yjGWGnqAjGJvcXbqQR2P3MyMEFnRbpcdFS6PBcLqew==}
@@ -5632,6 +5640,10 @@ snapshots:
       yallist: 4.0.0
 
   lru.min@1.1.4: {}
+
+  lucide-react@1.24.0(react@19.2.7):
+    dependencies:
+      react: 19.2.7
 
   luxon@3.7.2: {}
 

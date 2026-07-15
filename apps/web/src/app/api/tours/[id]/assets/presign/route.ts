@@ -32,7 +32,8 @@ export async function POST(req: Request, ctx: Ctx) {
     }
 
     const safeName = body.filename.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const storageKey = `orgs/${session.user.organizationId}/tours/${id}/${body.kind.toLowerCase()}/${randomUUID()}-${safeName}`;
+    const visibility = body.kind === "MULTI_VIEW" || body.kind === "OTHER" ? "private" : "public";
+    const storageKey = `${visibility}/orgs/${session.user.organizationId}/tours/${id}/${body.kind.toLowerCase()}/${randomUUID()}-${safeName}`;
 
     const uploadUrl = await presignPut({
       key: storageKey,

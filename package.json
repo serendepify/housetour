@@ -13,7 +13,7 @@
     "db:seed": "pnpm --filter @housetour/db seed",
     "db:setup": "pnpm db:generate && pnpm db:migrate && pnpm db:seed",
     "lint": "pnpm --filter @housetour/web lint",
-    "test": "pnpm --filter @housetour/db exec node --import tsx --test ../../packages/tour-engine/src/index.test.ts",
+    "test": "pnpm --filter @housetour/db exec node --import tsx --test ../../packages/tour-engine/src/index.test.ts ../../apps/web/src/lib/capture-quality.test.ts",
     "docker:up": "docker compose up -d",
     "docker:down": "docker compose down",
     "setup": "pnpm install && pnpm docker:up && sleep 3 && pnpm db:setup"

@@ -6,8 +6,9 @@ export async function buildTourManifest(slug: string): Promise<TourManifest | nu
     where: {
       slug,
       published: true,
-      status: "READY",
+      status: { not: "ARCHIVED" },
       archivedAt: null,
+      scenes: { some: { mediaUrl: { not: null } } },
     },
     include: {
       organization: true,

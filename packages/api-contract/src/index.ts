@@ -78,9 +78,17 @@ export const createTourSchema = z.object({
   title: z.string().min(2).max(120),
   description: z.string().max(2000).optional(),
   propertyTitle: z.string().max(200).optional(),
+  listingType: z.enum(["SALE", "RENT"]).default("SALE"),
+  currency: z.string().trim().length(3).default("USD"),
   addressLine1: z.string().max(200).optional(),
   city: z.string().max(100).optional(),
   region: z.string().max(100).optional(),
+  postalCode: z.string().max(30).optional(),
+  country: z.string().max(100).optional(),
+  bedrooms: z.number().int().min(0).max(99).optional(),
+  bathrooms: z.number().min(0).max(99).optional(),
+  sqft: z.number().int().min(0).max(10_000_000).optional(),
+  listPrice: z.number().min(0).max(10_000_000_000).optional(),
 });
 
 export type CreateTourInput = z.infer<typeof createTourSchema>;
@@ -134,9 +142,28 @@ export const completeAssetSchema = z.object({
   ]),
   sizeBytes: z.number().int().nonnegative(),
   sortOrder: z.number().int().optional(),
+  captureSessionId: z.string().uuid().optional(),
+  capturedAt: z.string().datetime().optional(),
+  meta: z.record(z.unknown()).optional(),
 });
 
 export type CompleteAssetInput = z.infer<typeof completeAssetSchema>;
+
+export const createCaptureSessionSchema = z.object({
+  roomName: z.string().trim().min(2).max(80),
+  mode: z.enum(["PERSPECTIVE", "PANO_360", "LIDAR"]).default("PERSPECTIVE"),
+  targetFrameCount: z.number().int().min(8).max(120).default(18),
+  deviceInfo: z.record(z.unknown()).optional(),
+});
+
+export type CreateCaptureSessionInput = z.infer<typeof createCaptureSessionSchema>;
+
+export const updateCaptureSessionSchema = z.object({
+  status: z.enum(["CAPTURING", "UPLOADING", "READY", "FAILED", "CANCELLED"]),
+  qualitySummary: z.record(z.unknown()).optional(),
+});
+
+export type UpdateCaptureSessionInput = z.infer<typeof updateCaptureSessionSchema>;
 
 export const createHotspotSchema = z.object({
   fromSceneId: z.string().uuid(),

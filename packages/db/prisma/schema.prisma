@@ -35,6 +35,35 @@ enum AssetKind {
   OTHER
 }
 
+enum CaptureMode {
+  PERSPECTIVE
+  PANO_360
+  LIDAR
+}
+
+enum CaptureSessionStatus {
+  DRAFT
+  CAPTURING
+  UPLOADING
+  READY
+  FAILED
+  CANCELLED
+}
+
+enum ListingStatus {
+  DRAFT
+  ACTIVE
+  UNDER_OFFER
+  SOLD
+  RENTED
+  ARCHIVED
+}
+
+enum ListingType {
+  SALE
+  RENT
+}
+
 enum SceneKind {
   PANO
   MESH
@@ -57,17 +86,18 @@ enum AnalyticsEventType {
 }
 
 model User {
-  id           String       @id @default(uuid()) @db.Uuid
-  email        String       @unique
-  name         String?
-  passwordHash String?
-  image        String?
-  createdAt    DateTime     @default(now())
-  updatedAt    DateTime     @updatedAt
-  memberships  Membership[]
-  toursCreated Tour[]       @relation("TourCreator")
-  accounts     Account[]
-  sessions     Session[]
+  id              String           @id @default(uuid()) @db.Uuid
+  email           String           @unique
+  name            String?
+  passwordHash    String?
+  image           String?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  memberships     Membership[]
+  toursCreated    Tour[]           @relation("TourCreator")
+  capturesCreated CaptureSession[] @relation("CaptureCreator")
+  accounts        Account[]
+  sessions        Session[]
 }
 
 model Account {
@@ -108,16 +138,16 @@ model VerificationToken {
 }
 
 model Organization {
-  id               String         @id @default(uuid()) @db.Uuid
+  id               String        @id @default(uuid()) @db.Uuid
   name             String
-  slug             String         @unique
+  slug             String        @unique
   logoUrl          String?
-  primaryColor     String         @default("#C4A35A")
+  primaryColor     String        @default("#C4A35A")
   ctaLabel         String?
   ctaUrl           String?
-  storageUsedBytes BigInt         @default(0)
-  createdAt        DateTime       @default(now())
-  updatedAt        DateTime       @updatedAt
+  storageUsedBytes BigInt        @default(0)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
   memberships      Membership[]
   properties       Property[]
   tours            Tour[]
@@ -191,6 +221,9 @@ model Property {
   id             String       @id @default(uuid()) @db.Uuid
   organizationId String       @db.Uuid
   title          String
+  status         ListingStatus @default(DRAFT)
+  listingType    ListingType   @default(SALE)
+  currency       String        @default("USD")
   addressLine1   String?
   city           String?
   region         String?
@@ -235,6 +268,7 @@ model Tour {
   floors          Floor[]
   scenes          TourScene[]
   assets          TourAsset[]
+  captureSessions CaptureSession[]
   jobs            ProcessingJob[]
   analyticsEvents AnalyticsEvent[]
 
@@ -244,16 +278,41 @@ model Tour {
   @@index([published, status])
 }
 
+model CaptureSession {
+  id               String               @id @default(uuid()) @db.Uuid
+  tourId           String               @db.Uuid
+  createdById      String?              @db.Uuid
+  roomName         String
+  mode             CaptureMode          @default(PERSPECTIVE)
+  status           CaptureSessionStatus @default(DRAFT)
+  frameCount       Int                  @default(0)
+  targetFrameCount Int                  @default(18)
+  deviceInfo       Json?
+  qualitySummary   Json?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  tour             Tour                 @relation(fields: [tourId], references: [id], onDelete: Cascade)
+  createdBy        User?                @relation("CaptureCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  assets           TourAsset[]
+  scenes           TourScene[]
+  jobs             ProcessingJob[]
+
+  @@index([tourId, status])
+  @@index([createdById])
+}
+
 model Floor {
-  id             String     @id @default(uuid()) @db.Uuid
-  tourId         String     @db.Uuid
+  id             String      @id @default(uuid()) @db.Uuid
+  tourId         String      @db.Uuid
   name           String
-  sortOrder      Int        @default(0)
+  sortOrder      Int         @default(0)
   planImageKey   String?
   planImageUrl   String?
   metersPerPixel Float?
-  createdAt      DateTime   @default(now())
-  tour           Tour       @relation(fields: [tourId], references: [id], onDelete: Cascade)
+  createdAt      DateTime    @default(now())
+  tour           Tour        @relation(fields: [tourId], references: [id], onDelete: Cascade)
   scenes         TourScene[]
 
   @@index([tourId])
@@ -262,6 +321,7 @@ model Floor {
 model TourScene {
   id           String    @id @default(uuid()) @db.Uuid
   tourId       String    @db.Uuid
+  captureSessionId String? @db.Uuid
   floorId      String?   @db.Uuid
   name         String
   kind         SceneKind @default(PANO)
@@ -277,10 +337,13 @@ model TourScene {
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
   tour         Tour      @relation(fields: [tourId], references: [id], onDelete: Cascade)
+  captureSession CaptureSession? @relation(fields: [captureSessionId], references: [id], onDelete: SetNull)
   floor        Floor?    @relation(fields: [floorId], references: [id], onDelete: SetNull)
   hotspots     Hotspot[] @relation("FromScene")
 
   @@index([tourId, sortOrder])
+  @@unique([tourId, captureSessionId])
+  @@index([captureSessionId])
 }
 
 model Hotspot {
@@ -298,38 +361,44 @@ model Hotspot {
 }
 
 model TourAsset {
-  id           String    @id @default(uuid()) @db.Uuid
-  tourId       String    @db.Uuid
-  kind         AssetKind
-  filename     String
-  contentType  String
-  sizeBytes    BigInt    @default(0)
-  storageKey   String
-  publicUrl    String?
-  sortOrder    Int       @default(0)
-  meta         Json?
-  createdAt    DateTime  @default(now())
-  tour         Tour      @relation(fields: [tourId], references: [id], onDelete: Cascade)
+  id               String          @id @default(uuid()) @db.Uuid
+  tourId           String          @db.Uuid
+  captureSessionId String?         @db.Uuid
+  kind             AssetKind
+  filename         String
+  contentType      String
+  sizeBytes        BigInt          @default(0)
+  storageKey       String          @unique
+  publicUrl        String?
+  sortOrder        Int             @default(0)
+  meta             Json?
+  createdAt        DateTime        @default(now())
+  tour             Tour            @relation(fields: [tourId], references: [id], onDelete: Cascade)
+  captureSession   CaptureSession? @relation(fields: [captureSessionId], references: [id], onDelete: SetNull)
 
   @@index([tourId, kind])
+  @@index([captureSessionId, sortOrder])
 }
 
 model ProcessingJob {
-  id          String    @id @default(uuid()) @db.Uuid
-  tourId      String    @db.Uuid
-  type        String    @default("tour.process")
-  status      JobStatus @default(QUEUED)
-  progress    Int       @default(0)
-  error       String?
-  result      Json?
-  bullJobId   String?
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  startedAt   DateTime?
-  finishedAt  DateTime?
-  tour        Tour      @relation(fields: [tourId], references: [id], onDelete: Cascade)
+  id         String    @id @default(uuid()) @db.Uuid
+  tourId     String    @db.Uuid
+  captureSessionId String? @db.Uuid
+  type       String    @default("tour.process")
+  status     JobStatus @default(QUEUED)
+  progress   Int       @default(0)
+  error      String?
+  result     Json?
+  bullJobId  String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  startedAt  DateTime?
+  finishedAt DateTime?
+  tour       Tour      @relation(fields: [tourId], references: [id], onDelete: Cascade)
+  captureSession CaptureSession? @relation(fields: [captureSessionId], references: [id], onDelete: SetNull)
 
   @@index([tourId, status])
+  @@index([captureSessionId, status])
 }
 
 model AnalyticsEvent {

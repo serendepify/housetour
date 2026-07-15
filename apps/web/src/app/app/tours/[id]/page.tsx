@@ -7,7 +7,10 @@ import { notFound, redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
-type Props = { params: Promise<{ id: string }> };
+type Props = {
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ capture?: string }>;
+};
 
 function extractStages(result: unknown) {
   if (!result || typeof result !== "object") return null;
@@ -21,10 +24,11 @@ function extractStages(result: unknown) {
   }>;
 }
 
-export default async function TourStudioPage({ params }: Props) {
+export default async function TourStudioPage({ params, searchParams }: Props) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.organizationId) redirect("/login");
   const { id } = await params;
+  const query = await searchParams;
 
   const [tour, org] = await Promise.all([
     prisma.tour.findFirst({
@@ -40,6 +44,7 @@ export default async function TourStudioPage({ params }: Props) {
           include: { hotspots: true },
         },
         floors: true,
+        captureSessions: { orderBy: { createdAt: "desc" }, take: 12 },
         jobs: { orderBy: { createdAt: "desc" }, take: 8 },
         property: true,
       },
@@ -75,6 +80,21 @@ export default async function TourStudioPage({ params }: Props) {
         failureReason: tour.failureReason,
         startSceneId: tour.startSceneId,
         viewCount: tour.viewCount,
+        property: tour.property
+          ? {
+              title: tour.property.title,
+              status: tour.property.status,
+              listingType: tour.property.listingType,
+              currency: tour.property.currency,
+              addressLine1: tour.property.addressLine1,
+              city: tour.property.city,
+              region: tour.property.region,
+              bedrooms: tour.property.bedrooms,
+              bathrooms: tour.property.bathrooms?.toString() ?? null,
+              sqft: tour.property.sqft,
+              listPrice: tour.property.listPrice?.toString() ?? null,
+            }
+          : null,
         assets: tour.assets.map((a) => ({
           id: a.id,
           kind: a.kind,
@@ -85,6 +105,7 @@ export default async function TourStudioPage({ params }: Props) {
         })),
         scenes: tour.scenes.map((s) => ({
           id: s.id,
+          captureSessionId: s.captureSessionId,
           name: s.name,
           sortOrder: s.sortOrder,
           mediaUrl: s.mediaUrl,
@@ -93,6 +114,7 @@ export default async function TourStudioPage({ params }: Props) {
         })),
         jobs: tour.jobs.map((j) => ({
           id: j.id,
+          captureSessionId: j.captureSessionId,
           type: j.type,
           status: j.status,
           progress: j.progress,
@@ -100,10 +122,20 @@ export default async function TourStudioPage({ params }: Props) {
           createdAt: j.createdAt.toISOString(),
           stages: extractStages(j.result),
         })),
+        captureSessions: tour.captureSessions.map((capture) => ({
+          id: capture.id,
+          roomName: capture.roomName,
+          mode: capture.mode,
+          status: capture.status,
+          frameCount: capture.frameCount,
+          targetFrameCount: capture.targetFrameCount,
+          createdAt: capture.createdAt.toISOString(),
+        })),
       }}
       manifest={manifest}
       appUrl={process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}
       allowPhotogrammetry={allowPhotogrammetry}
+      autoCapture={query.capture === "1"}
     />
   );
 }

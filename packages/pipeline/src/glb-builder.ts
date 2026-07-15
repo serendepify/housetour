@@ -17,9 +17,13 @@ function writeU32(view: DataView, offset: number, value: number) {
  * Build a simple extruded floorplan mesh from 2D capture points (normalized 0–1).
  * Points become room centers; we build a floor slab + perimeter walls.
  */
-export function buildRoomMeshGlb(points: Vec3[], options?: { wallHeight?: number; scale?: number }) {
+export function buildRoomMeshGlb(
+  points: Vec3[],
+  options?: { wallHeight?: number; scale?: number; imagePanels?: Buffer[] },
+) {
   const wallHeight = options?.wallHeight ?? 2.6;
   const scale = options?.scale ?? 12;
+  const imagePanels = options?.imagePanels?.slice(0, 12) ?? [];
 
   if (points.length === 0) {
     points = [
@@ -122,88 +126,206 @@ export function buildRoomMeshGlb(points: Vec3[], options?: { wallHeight?: number
   const posBuffer = new Float32Array(positions);
   const normBuffer = new Float32Array(normals);
   const indexBuffer = new Uint16Array(indices);
+  const planePositionBuffer = new Float32Array([
+    -1.6, -0.9, 0,
+    1.6, -0.9, 0,
+    1.6, 0.9, 0,
+    -1.6, 0.9, 0,
+  ]);
+  const planeNormalBuffer = new Float32Array([
+    0, 0, 1,
+    0, 0, 1,
+    0, 0, 1,
+    0, 0, 1,
+  ]);
+  const planeUvBuffer = new Float32Array([
+    0, 1,
+    1, 1,
+    1, 0,
+    0, 0,
+  ]);
+  const planeIndexBuffer = new Uint16Array([0, 1, 2, 0, 2, 3]);
 
-  const posBytes = new Uint8Array(posBuffer.buffer);
-  const normBytes = new Uint8Array(normBuffer.buffer);
-  const idxBytes = new Uint8Array(indexBuffer.buffer);
-
-  const binParts = [posBytes, normBytes, idxBytes];
+  type Part = { bytes: Uint8Array; offset: number; length: number };
+  const parts: Part[] = [];
   let binLength = 0;
-  const aligned: Uint8Array[] = [];
-  for (const part of binParts) {
-    aligned.push(part);
-    binLength += part.byteLength;
-    const pad = pad4(part.byteLength);
-    if (pad) {
-      aligned.push(new Uint8Array(pad));
-      binLength += pad;
-    }
+  function addPart(bytes: Uint8Array) {
+    const part = { bytes, offset: binLength, length: bytes.byteLength };
+    parts.push(part);
+    binLength += bytes.byteLength + pad4(bytes.byteLength);
+    return part;
   }
 
-  let posOffset = 0;
-  let normOffset = posBytes.byteLength + pad4(posBytes.byteLength);
-  let idxOffset =
-    normOffset + normBytes.byteLength + pad4(normBytes.byteLength);
+  const posPart = addPart(new Uint8Array(posBuffer.buffer));
+  const normPart = addPart(new Uint8Array(normBuffer.buffer));
+  const indexPart = addPart(new Uint8Array(indexBuffer.buffer));
+  const planePositionPart = imagePanels.length
+    ? addPart(new Uint8Array(planePositionBuffer.buffer))
+    : null;
+  const planeNormalPart = imagePanels.length
+    ? addPart(new Uint8Array(planeNormalBuffer.buffer))
+    : null;
+  const planeUvPart = imagePanels.length
+    ? addPart(new Uint8Array(planeUvBuffer.buffer))
+    : null;
+  const planeIndexPart = imagePanels.length
+    ? addPart(new Uint8Array(planeIndexBuffer.buffer))
+    : null;
+  const imageParts = imagePanels.map((image) => addPart(new Uint8Array(image)));
 
-  const gltf = {
-    asset: { version: "2.0", generator: "HouseTour Photogrammetry Pipeline" },
-    scenes: [{ nodes: [0] }],
+  const bufferViews: Array<Record<string, number>> = [
+    { buffer: 0, byteOffset: posPart.offset, byteLength: posPart.length, target: 34962 },
+    { buffer: 0, byteOffset: normPart.offset, byteLength: normPart.length, target: 34962 },
+    { buffer: 0, byteOffset: indexPart.offset, byteLength: indexPart.length, target: 34963 },
+  ];
+  if (planePositionPart && planeNormalPart && planeUvPart && planeIndexPart) {
+    bufferViews.push(
+      { buffer: 0, byteOffset: planePositionPart.offset, byteLength: planePositionPart.length, target: 34962 },
+      { buffer: 0, byteOffset: planeNormalPart.offset, byteLength: planeNormalPart.length, target: 34962 },
+      { buffer: 0, byteOffset: planeUvPart.offset, byteLength: planeUvPart.length, target: 34962 },
+      { buffer: 0, byteOffset: planeIndexPart.offset, byteLength: planeIndexPart.length, target: 34963 },
+    );
+  }
+  const firstImageBufferView = bufferViews.length;
+  for (const imagePart of imageParts) {
+    bufferViews.push({
+      buffer: 0,
+      byteOffset: imagePart.offset,
+      byteLength: imagePart.length,
+    });
+  }
+
+  const accessors: Array<Record<string, unknown>> = [
+    {
+      bufferView: 0,
+      componentType: 5126,
+      count: posBuffer.length / 3,
+      type: "VEC3",
+      max: [
+        Math.max(...positions.filter((_, i) => i % 3 === 0)),
+        Math.max(...positions.filter((_, i) => i % 3 === 1)),
+        Math.max(...positions.filter((_, i) => i % 3 === 2)),
+      ],
+      min: [
+        Math.min(...positions.filter((_, i) => i % 3 === 0)),
+        Math.min(...positions.filter((_, i) => i % 3 === 1)),
+        Math.min(...positions.filter((_, i) => i % 3 === 2)),
+      ],
+    },
+    { bufferView: 1, componentType: 5126, count: normBuffer.length / 3, type: "VEC3" },
+    { bufferView: 2, componentType: 5123, count: indexBuffer.length, type: "SCALAR" },
+  ];
+  if (imagePanels.length) {
+    accessors.push(
+      {
+        bufferView: 3,
+        componentType: 5126,
+        count: 4,
+        type: "VEC3",
+        min: [-1.6, -0.9, 0],
+        max: [1.6, 0.9, 0],
+      },
+      { bufferView: 4, componentType: 5126, count: 4, type: "VEC3" },
+      {
+        bufferView: 5,
+        componentType: 5126,
+        count: 4,
+        type: "VEC2",
+        min: [0, 0],
+        max: [1, 1],
+      },
+      { bufferView: 6, componentType: 5123, count: 6, type: "SCALAR" },
+    );
+  }
+
+  const materials: Array<Record<string, unknown>> = [
+    {
+      name: "NavigationProxy",
+      pbrMetallicRoughness: {
+        baseColorFactor: [0.12, 0.16, 0.15, 1],
+        metallicFactor: 0,
+        roughnessFactor: 0.9,
+      },
+      doubleSided: true,
+    },
+  ];
+  const meshes: Array<Record<string, unknown>> = [
+    {
+      name: "SpaceHull",
+      primitives: [
+        {
+          attributes: { POSITION: 0, NORMAL: 1 },
+          indices: 2,
+          material: 0,
+          mode: 4,
+        },
+      ],
+    },
+  ];
+  const nodes: Array<Record<string, unknown>> = imagePanels.length
+    ? []
+    : [{ mesh: 0, name: "NavigationProxy" }];
+  const images = imagePanels.map((_, index) => ({
+    bufferView: firstImageBufferView + index,
+    mimeType: "image/jpeg",
+    name: `CaptureFrame${String(index + 1).padStart(2, "0")}`,
+  }));
+  const textures = imagePanels.map((_, index) => ({ sampler: 0, source: index }));
+
+  for (let index = 0; index < imagePanels.length; index++) {
+    materials.push({
+      name: `CaptureMaterial${String(index + 1).padStart(2, "0")}`,
+      pbrMetallicRoughness: {
+        baseColorTexture: { index },
+        metallicFactor: 0,
+        roughnessFactor: 1,
+      },
+      doubleSided: true,
+      extensions: { KHR_materials_unlit: {} },
+    });
+    meshes.push({
+      name: `CapturePanel${String(index + 1).padStart(2, "0")}`,
+      primitives: [
+        {
+          attributes: { POSITION: 3, NORMAL: 4, TEXCOORD_0: 5 },
+          indices: 6,
+          material: index + 1,
+          mode: 4,
+        },
+      ],
+    });
+    const angle = (index / imagePanels.length) * Math.PI * 2;
+    const yaw = angle + Math.PI;
+    nodes.push({
+      mesh: index + 1,
+      name: `CaptureView${String(index + 1).padStart(2, "0")}`,
+      translation: [Math.sin(angle) * 4.2, 1.55, Math.cos(angle) * 4.2],
+      rotation: [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)],
+    });
+  }
+
+  const gltf: Record<string, unknown> = {
+    asset: { version: "2.0", generator: "HouseTour Capture Preview Pipeline" },
+    scenes: [{ nodes: nodes.map((_, index) => index) }],
     scene: 0,
-    nodes: [{ mesh: 0, name: "ReconstructedSpace" }],
-    meshes: [
-      {
-        name: "SpaceHull",
-        primitives: [
-          {
-            attributes: { POSITION: 0, NORMAL: 1 },
-            indices: 2,
-            mode: 4,
-          },
-        ],
-      },
-    ],
-    accessors: [
-      {
-        bufferView: 0,
-        componentType: 5126,
-        count: posBuffer.length / 3,
-        type: "VEC3",
-        max: [
-          Math.max(...positions.filter((_, i) => i % 3 === 0)),
-          Math.max(...positions.filter((_, i) => i % 3 === 1)),
-          Math.max(...positions.filter((_, i) => i % 3 === 2)),
-        ],
-        min: [
-          Math.min(...positions.filter((_, i) => i % 3 === 0)),
-          Math.min(...positions.filter((_, i) => i % 3 === 1)),
-          Math.min(...positions.filter((_, i) => i % 3 === 2)),
-        ],
-      },
-      {
-        bufferView: 1,
-        componentType: 5126,
-        count: normBuffer.length / 3,
-        type: "VEC3",
-      },
-      {
-        bufferView: 2,
-        componentType: 5123,
-        count: indexBuffer.length,
-        type: "SCALAR",
-      },
-    ],
-    bufferViews: [
-      { buffer: 0, byteOffset: posOffset, byteLength: posBytes.byteLength, target: 34962 },
-      { buffer: 0, byteOffset: normOffset, byteLength: normBytes.byteLength, target: 34962 },
-      { buffer: 0, byteOffset: idxOffset, byteLength: idxBytes.byteLength, target: 34963 },
-    ],
+    nodes,
+    meshes,
+    materials,
+    accessors,
+    bufferViews,
     buffers: [{ byteLength: binLength }],
   };
+  if (imagePanels.length) {
+    gltf.images = images;
+    gltf.textures = textures;
+    gltf.samplers = [{ magFilter: 9729, minFilter: 9987, wrapS: 33071, wrapT: 33071 }];
+    gltf.extensionsUsed = ["KHR_materials_unlit"];
+  }
 
   const json = Buffer.from(JSON.stringify(gltf));
   const jsonPad = pad4(json.length);
   const jsonChunkLength = json.length + jsonPad;
-  const binChunkLength = binLength + pad4(binLength);
+  const binChunkLength = binLength;
 
   const totalLength = 12 + 8 + jsonChunkLength + 8 + binChunkLength;
   const out = Buffer.alloc(totalLength);
@@ -220,10 +342,8 @@ export function buildRoomMeshGlb(points: Vec3[], options?: { wallHeight?: number
   const binStart = 20 + jsonChunkLength;
   out.writeUInt32LE(binChunkLength, binStart);
   out.writeUInt32LE(0x004e4942, binStart + 4); // BIN
-  let o = binStart + 8;
-  for (const part of aligned) {
-    Buffer.from(part).copy(out, o);
-    o += part.byteLength;
+  for (const part of parts) {
+    Buffer.from(part.bytes).copy(out, binStart + 8 + part.offset);
   }
 
   return out;

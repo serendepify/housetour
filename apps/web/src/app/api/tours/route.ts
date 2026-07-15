@@ -70,9 +70,17 @@ export async function POST(req: Request) {
           data: {
             organizationId: orgId,
             title: body.propertyTitle ?? body.title,
+            listingType: body.listingType,
+            currency: body.currency.toUpperCase(),
             addressLine1: body.addressLine1,
             city: body.city,
             region: body.region,
+            postalCode: body.postalCode,
+            country: body.country,
+            bedrooms: body.bedrooms,
+            bathrooms: body.bathrooms,
+            sqft: body.sqft,
+            listPrice: body.listPrice,
           },
         });
         propertyId = property.id;

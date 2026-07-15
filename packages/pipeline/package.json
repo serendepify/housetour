@@ -16,6 +16,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1086.0",
     "@housetour/db": "workspace:*",
     "@housetour/tour-engine": "workspace:*",
     "sharp": "^0.34.0"

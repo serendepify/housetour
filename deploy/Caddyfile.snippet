@@ -11,3 +11,16 @@ housetour.example.com {
 		Referrer-Policy strict-origin-when-cross-origin
 	}
 }
+
+# Set S3_BROWSER_ENDPOINT=https://media.housetour.example.com and
+# S3_PUBLIC_URL=https://media.housetour.example.com/housetour.
+media.housetour.example.com {
+	encode gzip zstd
+	reverse_proxy 127.0.0.1:19000
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+}

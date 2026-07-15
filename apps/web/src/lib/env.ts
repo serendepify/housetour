@@ -9,6 +9,8 @@ export const env = {
   appUrl: process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
   s3: {
     endpoint: process.env.S3_ENDPOINT ?? "http://localhost:9000",
+    browserEndpoint:
+      process.env.S3_BROWSER_ENDPOINT ?? process.env.S3_ENDPOINT ?? "http://localhost:9000",
     region: process.env.S3_REGION ?? "us-east-1",
     accessKey: process.env.S3_ACCESS_KEY ?? "housetour",
     secretKey: process.env.S3_SECRET_KEY ?? "housetoursecret",

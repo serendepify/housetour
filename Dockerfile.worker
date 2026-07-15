@@ -29,4 +29,4 @@ LABEL org.opencontainers.image.source="https://github.com/serendepify/housetour"
 LABEL org.opencontainers.image.title="HouseTour Worker"
 
 VOLUME ["/data/derived"]
-CMD ["pnpm", "--filter", "@housetour/worker", "dev"]
+CMD ["pnpm", "--filter", "@housetour/worker", "start"]

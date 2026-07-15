@@ -53,12 +53,31 @@ services:
     networks:
       - housetour
 
+  minio-init:
+    image: minio/mc:latest
+    container_name: housetour-minio-init
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: >
+      /bin/sh -c "
+      sleep 3;
+      mc alias set local http://minio:9000 ${S3_ACCESS_KEY:-housetour} ${S3_SECRET_KEY:-housetoursecret};
+      mc mb -p local/${S3_BUCKET:-housetour} || true;
+      mc anonymous set download local/${S3_BUCKET:-housetour}/public || true;
+      exit 0;
+      "
+    networks:
+      - housetour
+
   web:
     image: ${WEB_IMAGE:-ghcr.io/serendepify/housetour:latest}
     container_name: housetour-web
     restart: unless-stopped
     env_file:
       - .env
+    environment:
+      S3_ENDPOINT: http://minio:9000
     depends_on:
       postgres:
         condition: service_healthy
@@ -76,9 +95,7 @@ services:
     env_file:
       - .env
     environment:
-      TOUR_DERIVED_PUBLIC_DIR: /data/derived
-    volumes:
-      - housetour-derived:/data/derived
+      S3_ENDPOINT: http://minio:9000
     depends_on:
       postgres:
         condition: service_healthy
@@ -91,7 +108,6 @@ volumes:
   housetour-pg-data:
   housetour-redis-data:
   housetour-minio-data:
-  housetour-derived:
 
 networks:
   housetour:

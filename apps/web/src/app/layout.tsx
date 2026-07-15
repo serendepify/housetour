@@ -1,20 +1,9 @@
 import type { Metadata } from "next";
-import { DM_Sans, Fraunces } from "next/font/google";
 import "./globals.css";
-
-const sans = DM_Sans({
-  subsets: ["latin"],
-  variable: "--font-sans",
-});
-
-const display = Fraunces({
-  subsets: ["latin"],
-  variable: "--font-display",
-});
 
 export const metadata: Metadata = {
   title: {
-    default: "HouseTour — Walkable 3D Real Estate Tours",
+    default: "HouseTour - Walkable 3D Real Estate Tours",
     template: "%s · HouseTour",
   },
   description:
@@ -27,7 +16,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${sans.variable} ${display.variable}`}>
+    <html lang="en">
       <body className="font-sans">{children}</body>
     </html>
   );

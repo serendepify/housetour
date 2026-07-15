@@ -11,9 +11,11 @@ import {
 } from "@react-three/drei";
 import { createXRStore, XR } from "@react-three/xr";
 import {
+  type ComponentRef,
   Suspense,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -124,6 +126,11 @@ function SceneCamera({
 }) {
   const { camera } = useThree();
   useEffect(() => {
+    camera.position.set(0, 0, 0.1);
+    if (camera instanceof THREE.PerspectiveCamera) {
+      camera.fov = 75;
+      camera.updateProjectionMatrix();
+    }
     const target = sphericalToCartesian(yaw, pitch, 10);
     camera.lookAt(target.x, target.y, target.z);
   }, [camera, yaw, pitch]);
@@ -149,16 +156,142 @@ function FadeController({
   return null;
 }
 
-function MeshWalkRoom({ url }: { url: string }) {
+function CaptureLookControls({
+  initialYaw = 0,
+  initialPitch = 0,
+}: {
+  initialYaw?: number;
+  initialPitch?: number;
+}) {
+  const { camera, gl } = useThree();
+  const drag = useRef({ active: false, x: 0, y: 0 });
+  const yaw = useRef(initialYaw);
+  const pitch = useRef(initialPitch);
+
+  useEffect(() => {
+    const element = gl.domElement;
+    camera.position.set(0, 1.55, 0);
+    camera.rotation.order = "YXZ";
+    camera.rotation.set(pitch.current, yaw.current, 0);
+    if (camera instanceof THREE.PerspectiveCamera) {
+      camera.fov = 58;
+      camera.updateProjectionMatrix();
+    }
+
+    const onPointerDown = (event: PointerEvent) => {
+      if (event.pointerType === "mouse" && event.button !== 0) return;
+      drag.current = { active: true, x: event.clientX, y: event.clientY };
+      element.setPointerCapture(event.pointerId);
+    };
+    const onPointerMove = (event: PointerEvent) => {
+      if (!drag.current.active) return;
+      const deltaX = event.clientX - drag.current.x;
+      const deltaY = event.clientY - drag.current.y;
+      drag.current.x = event.clientX;
+      drag.current.y = event.clientY;
+      yaw.current -= deltaX * 0.004;
+      pitch.current = THREE.MathUtils.clamp(
+        pitch.current - deltaY * 0.003,
+        -Math.PI / 3,
+        Math.PI / 3,
+      );
+      camera.rotation.set(pitch.current, yaw.current, 0);
+    };
+    const onPointerUp = (event: PointerEvent) => {
+      drag.current.active = false;
+      if (element.hasPointerCapture(event.pointerId)) {
+        element.releasePointerCapture(event.pointerId);
+      }
+    };
+
+    element.addEventListener("pointerdown", onPointerDown);
+    element.addEventListener("pointermove", onPointerMove);
+    element.addEventListener("pointerup", onPointerUp);
+    element.addEventListener("pointercancel", onPointerUp);
+    return () => {
+      element.removeEventListener("pointerdown", onPointerDown);
+      element.removeEventListener("pointermove", onPointerMove);
+      element.removeEventListener("pointerup", onPointerUp);
+      element.removeEventListener("pointercancel", onPointerUp);
+    };
+  }, [camera, gl, initialPitch, initialYaw]);
+
+  return null;
+}
+
+function MeshWalkRoom({
+  url,
+  initialYaw = 0,
+  initialPitch = 0,
+}: {
+  url: string;
+  initialYaw?: number;
+  initialPitch?: number;
+}) {
   const { scene } = useGLTF(url);
-  const cloned = useMemo(() => scene.clone(true), [scene]);
+  const { camera } = useThree();
+  const controlsRef = useRef<ComponentRef<typeof OrbitControls>>(null);
+  const { cloned, isCaptureGallery } = useMemo(() => {
+    const next = scene.clone(true);
+    let hasCaptureFrames = false;
+
+    next.traverse((object) => {
+      if (object.name.startsWith("CaptureView")) {
+        hasCaptureFrames = true;
+        object.scale.set(1.08, 2.25, 1);
+      }
+    });
+
+    if (hasCaptureFrames) {
+      next.traverse((object) => {
+        if (object.name === "NavigationProxy" || object.name === "SpaceHull") {
+          object.visible = false;
+        }
+      });
+    }
+
+    return { cloned: next, isCaptureGallery: hasCaptureFrames };
+  }, [scene]);
+
+  useLayoutEffect(() => {
+    const controls = controlsRef.current;
+    if (isCaptureGallery) {
+      camera.position.set(0, 1.55, 0);
+      camera.rotation.order = "YXZ";
+      camera.rotation.set(initialPitch, initialYaw, 0);
+    } else {
+      camera.position.set(5.5, 3.2, 5.5);
+      controls?.target.set(0, 0.4, 0);
+    }
+    if (camera instanceof THREE.PerspectiveCamera) {
+      camera.fov = isCaptureGallery ? 58 : 75;
+      camera.updateProjectionMatrix();
+    }
+    controls?.update();
+  }, [camera, initialPitch, initialYaw, isCaptureGallery]);
+
   return (
-    <primitive
-      object={cloned}
-      position={[0, -1.4, 0]}
-      scale={1}
-      rotation={[0, Math.PI / 8, 0]}
-    />
+    <>
+      <primitive
+        object={cloned}
+        position={isCaptureGallery ? [0, 0, 0] : [0, -1.4, 0]}
+        rotation={isCaptureGallery ? [0, 0, 0] : [0, Math.PI / 8, 0]}
+      />
+      {isCaptureGallery ? (
+        <CaptureLookControls initialYaw={initialYaw} initialPitch={initialPitch} />
+      ) : (
+        <OrbitControls
+          ref={controlsRef}
+          enableZoom
+          enablePan
+          minDistance={2}
+          maxDistance={30}
+          target={[0, 0.4, 0]}
+          dampingFactor={0.08}
+          enableDamping
+        />
+      )}
+    </>
   );
 }
 
@@ -216,15 +349,19 @@ function TourScene({
               </Html>
             }
           >
-            <MeshWalkRoom url={scene.mediaUrl} />
+            <MeshWalkRoom
+              url={scene.mediaUrl}
+              initialYaw={scene.initialYaw ?? 0}
+              initialPitch={scene.initialPitch ?? 0}
+            />
           </Suspense>
           {/* Billboard hotspots around the room for mesh ↔ pano jumps */}
-          {scene.hotspots.map((h, i) => {
-            const angle = (i / Math.max(scene.hotspots.length, 1)) * Math.PI * 2;
+          {scene.hotspots.map((h) => {
+            const pos = sphericalToCartesian(h.yaw, h.pitch ?? 0, 4.5);
             return (
               <group
                 key={h.id}
-                position={[Math.sin(angle) * 4.5, 0.6, Math.cos(angle) * 4.5]}
+                position={[pos.x, pos.y + 0.6, pos.z]}
               >
                 <mesh
                   onClick={(e) => {
@@ -255,15 +392,6 @@ function TourScene({
               </group>
             );
           })}
-          <OrbitControls
-            enableZoom
-            enablePan
-            minDistance={2}
-            maxDistance={18}
-            target={[0, 0.4, 0]}
-            dampingFactor={0.08}
-            enableDamping
-          />
         </>
       ) : (
         <>
@@ -308,7 +436,7 @@ export function TourViewer({
   const [fading, setFading] = useState(false);
   const [pendingScene, setPendingScene] = useState<string | null>(null);
   const [vrSupported, setVrSupported] = useState(false);
-  const [infoOpen, setInfoOpen] = useState(mode !== "embed");
+  const [infoOpen, setInfoOpen] = useState(mode === "public");
   const [walkTarget, setWalkTarget] = useState<{ x: number; y: number } | null>(null);
   const cameraYawRef = useRef(0);
   const primary = manifest.branding?.primaryColor || "#C4A35A";
@@ -331,7 +459,7 @@ export function TourViewer({
     const m = new Map<string, (typeof manifest.scenes)[number]>();
     for (const s of manifest.scenes) m.set(s.id, s);
     return m;
-  }, [manifest.scenes]);
+  }, [manifest]);
 
   // Find the hotspot closest to a given yaw angle
   const findHotspotAtAngle = useCallback(
@@ -460,37 +588,49 @@ export function TourViewer({
 
   const price = formatListPrice(manifest.property?.listPrice);
   const floor = manifest.floors[0];
+  const hasSceneNavigation = manifest.scenes.length > 1;
+  const isRoomPreview = mode === "studio" && !hasSceneNavigation;
 
   return (
     <div
       className={`relative h-full w-full overflow-hidden bg-ink-950 ${className ?? ""}`}
       onClick={handleCanvasClick}
     >
-      <Canvas
-        camera={{
-          position:
-            scene?.kind === "mesh" ? [5.5, 3.2, 5.5] : [0, 0, 0.1],
-          fov: 75,
-          near: 0.1,
-          far: 1000,
-        }}
-        gl={{ antialias: true, alpha: false }}
-        dpr={[1, 2]}
-      >
-        <XR store={xrStore}>
-          <color attach="background" args={["#0B0C0E"]} />
-          {sceneId ? (
-            <TourScene
-              manifest={manifest}
-              sceneId={sceneId}
-              onNavigate={navigate}
-              primaryColor={primary}
-              onCameraYaw={setCameraYaw}
-            />
-          ) : null}
-          <FadeController fading={fading} onDone={finishFade} />
-        </XR>
-      </Canvas>
+      <div className="absolute inset-0">
+        <Canvas
+          camera={{
+            position:
+              scene?.kind === "mesh"
+                ? scene.mediaUrl.includes("navigation-proxy")
+                  ? [0, 1.55, 0.12]
+                  : [5.5, 3.2, 5.5]
+                : [0, 0, 0.1],
+            fov:
+              scene?.kind === "mesh" &&
+              scene.mediaUrl.includes("navigation-proxy")
+                ? 58
+                : 75,
+            near: 0.1,
+            far: 1000,
+          }}
+          gl={{ antialias: true, alpha: false }}
+          dpr={[1, 2]}
+        >
+          <XR store={xrStore}>
+            <color attach="background" args={["#0B0C0E"]} />
+            {sceneId ? (
+              <TourScene
+                manifest={manifest}
+                sceneId={sceneId}
+                onNavigate={navigate}
+                primaryColor={primary}
+                onCameraYaw={setCameraYaw}
+              />
+            ) : null}
+            <FadeController fading={fading} onDone={finishFade} />
+          </XR>
+        </Canvas>
+      </div>
 
       <div
         className="pointer-events-none absolute inset-0 bg-black transition-opacity duration-300"
@@ -511,14 +651,22 @@ export function TourViewer({
       ) : null}
 
       {/* Top bar */}
-      <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between p-4 md:p-6">
-        <div className="pointer-events-auto rounded-2xl border border-white/10 bg-black/45 px-4 py-3 backdrop-blur-md">
+      <div
+        className={`pointer-events-none absolute inset-x-0 top-0 z-10 flex items-start justify-between p-4 md:p-6 ${isRoomPreview ? "pr-20 md:pr-32" : ""}`}
+      >
+        <div className="pointer-events-auto min-w-0 max-w-full rounded-lg border border-white/10 bg-black/45 px-4 py-3 backdrop-blur-md">
           <p className="text-[10px] uppercase tracking-[0.2em] text-gold-300">
             {manifest.branding?.orgName ?? "HouseTour"}
           </p>
-          <h1 className="font-display text-lg text-white md:text-xl">{manifest.title}</h1>
+          <h1 className="font-display text-lg text-white md:text-xl">
+            {isRoomPreview ? scene?.name : manifest.title}
+          </h1>
           {scene ? (
-            <p className="text-xs text-white/70">{scene.name}</p>
+            <p className="text-xs text-white/70">
+              {isRoomPreview
+                ? `Room scan in ${manifest.property?.title ?? manifest.title}`
+                : scene.name}
+            </p>
           ) : null}
         </div>
 
@@ -532,13 +680,15 @@ export function TourViewer({
               Enter VR
             </button>
           ) : null}
-          <button
-            type="button"
-            onClick={() => setInfoOpen((v) => !v)}
-            className="rounded-full border border-white/15 bg-black/40 px-3 py-1.5 text-xs text-white/90 backdrop-blur"
-          >
-            {infoOpen ? "Hide info" : "Property info"}
-          </button>
+          {mode === "public" ? (
+            <button
+              type="button"
+              onClick={() => setInfoOpen((v) => !v)}
+              className="rounded-full border border-white/15 bg-black/40 px-3 py-1.5 text-xs text-white/90 backdrop-blur"
+            >
+              {infoOpen ? "Hide info" : "Property info"}
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -596,7 +746,7 @@ export function TourViewer({
           ) : null}
 
           <div className="flex items-end gap-3">
-            {manifest.flags.showFloorPlan && floor?.planUrl ? (
+            {hasSceneNavigation && manifest.flags.showFloorPlan && floor?.planUrl ? (
               <div className="hidden h-36 w-44 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-black/50 p-2 backdrop-blur md:block">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
@@ -630,30 +780,34 @@ export function TourViewer({
               </div>
             ) : null}
 
-            <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-1">
-              {manifest.scenes.map((s) => (
-                <button
-                  key={s.id}
-                  type="button"
-                  onClick={() => navigate(s.id)}
-                  className={`shrink-0 rounded-xl border px-3 py-2 text-left text-xs transition ${
-                    s.id === sceneId
-                      ? "border-gold-500/60 bg-gold-500/20 text-white"
-                      : "border-white/10 bg-black/45 text-white/80 hover:bg-white/10"
-                  }`}
-                >
-                  <span className="block font-medium">{s.name}</span>
-                  <span className="text-[10px] uppercase tracking-wider text-white/45">
-                    {s.kind}
-                  </span>
-                </button>
-              ))}
-            </div>
+            {hasSceneNavigation ? (
+              <div className="flex min-w-0 flex-1 gap-2 overflow-x-auto pb-1">
+                {manifest.scenes.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onClick={() => navigate(s.id)}
+                    className={`shrink-0 rounded-xl border px-3 py-2 text-left text-xs transition ${
+                      s.id === sceneId
+                        ? "border-gold-500/60 bg-gold-500/20 text-white"
+                        : "border-white/10 bg-black/45 text-white/80 hover:bg-white/10"
+                    }`}
+                  >
+                    <span className="block font-medium">{s.name}</span>
+                    <span className="text-[10px] uppercase tracking-wider text-white/45">
+                      {s.kind}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
           </div>
 
           <p className="text-center text-[10px] uppercase tracking-[0.18em] text-white/40">
             {scene?.kind === "mesh"
-              ? "Orbit mesh · Scroll zoom · Click markers to return to panoramas"
+              ? scene.mediaUrl.includes("navigation-proxy")
+                ? "Drag to look around the captured room"
+                : "Orbit mesh - scroll zoom - click markers to change rooms"
               : "Drag to look · Click floor or press WASD/arrows to walk · Click markers to jump"}
           </p>
         </div>
