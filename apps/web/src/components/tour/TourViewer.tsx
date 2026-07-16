@@ -21,6 +21,27 @@ import {
   useState,
 } from "react";
 import * as THREE from "three";
+import { Component, type ReactNode } from "react";
+
+// Catches GLTF load failures (e.g. a derived mesh 404s in object storage) so a
+// single broken room shows a friendly fallback instead of crashing the canvas.
+class MeshErrorBoundary extends Component<{
+  fallback: ReactNode;
+  children: ReactNode;
+}> {
+  state = { hasError: false };
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  componentDidCatch() {
+    // swallow — the fallback UI communicates the issue
+  }
+  render() {
+    if (this.state.hasError) return this.props.fallback;
+    return this.props.children;
+  }
+}
 
 const xrStore = createXRStore();
 
@@ -223,16 +244,23 @@ function MeshWalkRoom({
   url,
   initialYaw = 0,
   initialPitch = 0,
+  walkEnabled = false,
+  scene,
+  onEnterDoorway,
 }: {
   url: string;
   initialYaw?: number;
   initialPitch?: number;
+  walkEnabled?: boolean;
+  scene: NonNullable<ReturnType<typeof useManifestScene>>;
+  onEnterDoorway?: (id: string) => void;
 }) {
-  const { scene } = useGLTF(url);
+  const { scene: gltfScene } = useGLTF(url);
   const { camera } = useThree();
   const controlsRef = useRef<ComponentRef<typeof OrbitControls>>(null);
-  const { cloned, isCaptureGallery } = useMemo(() => {
-    const next = scene.clone(true);
+  const { cloned, isCaptureGallery, colliders } = useMemo(() => {
+    const next = gltfScene.clone(true);
+    const colliders: THREE.Object3D[] = [];
     let hasCaptureFrames = false;
 
     next.traverse((object) => {
@@ -248,10 +276,17 @@ function MeshWalkRoom({
           object.visible = false;
         }
       });
+    } else {
+      // Reconstructed room: collect solid meshes as wall colliders.
+      next.traverse((object) => {
+        if ((object as THREE.Mesh).isMesh && object.name !== "Floor") {
+          colliders.push(object);
+        }
+      });
     }
 
-    return { cloned: next, isCaptureGallery: hasCaptureFrames };
-  }, [scene]);
+    return { cloned: next, isCaptureGallery: hasCaptureFrames, colliders };
+  }, [gltfScene]);
 
   useLayoutEffect(() => {
     const controls = controlsRef.current;
@@ -279,6 +314,13 @@ function MeshWalkRoom({
       />
       {isCaptureGallery ? (
         <CaptureLookControls initialYaw={initialYaw} initialPitch={initialPitch} />
+      ) : walkEnabled ? (
+        <MeshWalkController
+          enabled
+          colliders={colliders}
+          scene={scene}
+          onEnterDoorway={(id) => onEnterDoorway?.(id)}
+        />
       ) : (
         <OrbitControls
           ref={controlsRef}
@@ -303,18 +345,245 @@ function CameraTracker({ onYaw }: { onYaw: (yaw: number) => void }) {
   return null;
 }
 
+// Tracks held movement keys for continuous first-person walking.
+function useWalkKeys() {
+  const keys = useRef({ forward: false, back: false, left: false, right: false });
+  useEffect(() => {
+    const set = (code: string, down: boolean) => {
+      switch (code) {
+        case "KeyW":
+        case "ArrowUp":
+          keys.current.forward = down;
+          break;
+        case "KeyS":
+        case "ArrowDown":
+          keys.current.back = down;
+          break;
+        case "KeyA":
+        case "ArrowLeft":
+          keys.current.left = down;
+          break;
+        case "KeyD":
+        case "ArrowRight":
+          keys.current.right = down;
+          break;
+      }
+    };
+    const down = (e: KeyboardEvent) => {
+      if (
+        ["KeyW", "KeyA", "KeyS", "KeyD", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(
+          e.code,
+        )
+      ) {
+        e.preventDefault();
+        set(e.code, true);
+      }
+    };
+    const up = (e: KeyboardEvent) => set(e.code, false);
+    const blur = () => {
+      keys.current.forward = keys.current.back = keys.current.left = keys.current.right = false;
+    };
+    window.addEventListener("keydown", down);
+    window.addEventListener("keyup", up);
+    window.addEventListener("blur", blur);
+    return () => {
+      window.removeEventListener("keydown", down);
+      window.removeEventListener("keyup", up);
+      window.removeEventListener("blur", blur);
+    };
+  }, []);
+  return keys;
+}
+
+// Continuous first-person walk for panorama mode.
+// WASD translates the camera through the equirect space; walking toward a
+// doorway hotspot smoothly transitions to the next room (no teleport jump).
+function WalkController({
+  enabled,
+  speed = 6,
+  scene,
+  onEnterDoorway,
+}: {
+  enabled: boolean;
+  speed?: number;
+  scene: NonNullable<ReturnType<typeof useManifestScene>>;
+  onEnterDoorway: (sceneId: string) => void;
+}) {
+  const { camera } = useThree();
+  const keys = useWalkKeys();
+  const fadeCooldown = useRef(0);
+
+  useFrame((_, delta) => {
+    if (!enabled) return;
+    const k = keys.current;
+    const moving = k.forward || k.back || k.left || k.right;
+    if (!moving) return;
+
+    const yaw = camera.rotation.y;
+    let dx = 0;
+    let dz = 0;
+    if (k.forward) {
+      dx += -Math.sin(yaw);
+      dz += -Math.cos(yaw);
+    }
+    if (k.back) {
+      dx += Math.sin(yaw);
+      dz += Math.cos(yaw);
+    }
+    if (k.right) {
+      dx += Math.cos(yaw);
+      dz += -Math.sin(yaw);
+    }
+    if (k.left) {
+      dx += -Math.cos(yaw);
+      dz += Math.sin(yaw);
+    }
+    const len = Math.hypot(dx, dz) || 1;
+    dx /= len;
+    dz /= len;
+
+    const step = speed * delta;
+    camera.position.x += dx * step;
+    camera.position.z += dz * step;
+    camera.position.y = 0;
+
+    const radius = Math.hypot(camera.position.x, camera.position.z);
+    fadeCooldown.current = Math.max(0, fadeCooldown.current - delta);
+    if (radius > 18 && fadeCooldown.current === 0 && scene.hotspots?.length) {
+      let best: (typeof scene.hotspots)[number] | null = null;
+      let bestDist = Infinity;
+      for (const h of scene.hotspots) {
+        const norm = ((h.yaw % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+        const view = ((yaw % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+        let diff = Math.abs(norm - view);
+        if (diff > Math.PI) diff = Math.PI * 2 - diff;
+        if (diff < bestDist) {
+          bestDist = diff;
+          best = h;
+        }
+      }
+      if (best && bestDist < Math.PI / 4) {
+        fadeCooldown.current = 1.5;
+        onEnterDoorway(best.targetSceneId);
+      }
+    }
+  });
+
+  return null;
+}
+
+// Continuous first-person walk for reconstructed mesh rooms with wall collision.
+function MeshWalkController({
+  enabled,
+  speed = 2.4,
+  colliders,
+  scene,
+  onEnterDoorway,
+}: {
+  enabled: boolean;
+  speed?: number;
+  colliders: THREE.Object3D[];
+  scene: NonNullable<ReturnType<typeof useManifestScene>>;
+  onEnterDoorway: (sceneId: string) => void;
+}) {
+  const { camera } = useThree();
+  const keys = useWalkKeys();
+  const fadeCooldown = useRef(0);
+  const raycaster = useRef(new THREE.Raycaster());
+
+  useFrame((_, delta) => {
+    if (!enabled) return;
+    const k = keys.current;
+    const moving = k.forward || k.back || k.left || k.right;
+    if (!moving) return;
+
+    const yaw = camera.rotation.y;
+    let dx = 0;
+    let dz = 0;
+    if (k.forward) {
+      dx += -Math.sin(yaw);
+      dz += -Math.cos(yaw);
+    }
+    if (k.back) {
+      dx += Math.sin(yaw);
+      dz += Math.cos(yaw);
+    }
+    if (k.right) {
+      dx += Math.cos(yaw);
+      dz += -Math.sin(yaw);
+    }
+    if (k.left) {
+      dx += -Math.cos(yaw);
+      dz += Math.sin(yaw);
+    }
+    const len = Math.hypot(dx, dz) || 1;
+    dx /= len;
+    dz /= len;
+
+    const step = speed * delta;
+    const next = new THREE.Vector3(
+      camera.position.x + dx * step,
+      camera.position.y,
+      camera.position.z + dz * step,
+    );
+
+    const tryAxis = (axis: "x" | "z", value: number) => {
+      const probe = new THREE.Vector3(
+        axis === "x" ? value : camera.position.x,
+        camera.position.y,
+        axis === "z" ? value : camera.position.z,
+      );
+      raycaster.current.set(probe, new THREE.Vector3(0, 0, 1));
+      raycaster.current.far = 0.6;
+      const hit = colliders.some((c) => raycaster.current.intersectObject(c, true));
+      if (!hit) camera.position[axis] = value;
+    };
+    tryAxis("x", next.x);
+    tryAxis("z", next.z);
+
+    fadeCooldown.current = Math.max(0, fadeCooldown.current - delta);
+    if (fadeCooldown.current === 0 && scene.hotspots?.length) {
+      let best: (typeof scene.hotspots)[number] | null = null;
+      let bestDist = Infinity;
+      for (const h of scene.hotspots) {
+        const target = sphericalToCartesian(h.yaw, h.pitch ?? 0, 4.5);
+        const d = Math.hypot(
+          camera.position.x - target.x,
+          camera.position.z - target.z,
+        );
+        if (d < bestDist) {
+          bestDist = d;
+          best = h;
+        }
+      }
+      if (best && bestDist < 1.4) {
+        fadeCooldown.current = 1.5;
+        onEnterDoorway(best.targetSceneId);
+      }
+    }
+  });
+
+  return null;
+}
+
+function useManifestScene(manifest: TourManifest, sceneId: string) {
+  return manifest.scenes.find((s) => s.id === sceneId);
+}
+
 function TourScene({
   manifest,
   sceneId,
   onNavigate,
   primaryColor,
   onCameraYaw,
+  onEnterDoorway,
 }: {
   manifest: TourManifest;
   sceneId: string;
   onNavigate: (id: string) => void;
   primaryColor: string;
   onCameraYaw?: (yaw: number) => void;
+  onEnterDoorway: (id: string) => void;
 }) {
   const scene = manifest.scenes.find((s) => s.id === sceneId);
   if (!scene || !scene.mediaUrl) {
@@ -340,21 +609,37 @@ function TourScene({
         <>
           <directionalLight position={[6, 10, 4]} intensity={1.1} />
           <directionalLight position={[-4, 6, -2]} intensity={0.35} />
-          <Suspense
+          <MeshErrorBoundary
             fallback={
               <Html center>
-                <div className="rounded-lg bg-black/70 px-3 py-1.5 text-xs text-white">
-                  Loading mesh…
+                <div className="max-w-[16rem] rounded-lg bg-black/70 px-4 py-3 text-center text-sm text-white">
+                  This 3D room could not be loaded.
+                  <span className="mt-1 block text-[11px] text-white/50">
+                    Its model is missing from storage.
+                  </span>
                 </div>
               </Html>
             }
           >
-            <MeshWalkRoom
-              url={scene.mediaUrl}
-              initialYaw={scene.initialYaw ?? 0}
-              initialPitch={scene.initialPitch ?? 0}
-            />
-          </Suspense>
+            <Suspense
+              fallback={
+                <Html center>
+                  <div className="rounded-lg bg-black/70 px-3 py-1.5 text-xs text-white">
+                    Loading mesh…
+                  </div>
+                </Html>
+              }
+            >
+              <MeshWalkRoom
+                url={scene.mediaUrl}
+                initialYaw={scene.initialYaw ?? 0}
+                initialPitch={scene.initialPitch ?? 0}
+                walkEnabled
+                scene={scene}
+                onEnterDoorway={onEnterDoorway}
+              />
+            </Suspense>
+          </MeshErrorBoundary>
           {/* Billboard hotspots around the room for mesh ↔ pano jumps */}
           {scene.hotspots.map((h) => {
             const pos = sphericalToCartesian(h.yaw, h.pitch ?? 0, 4.5);
@@ -418,6 +703,11 @@ function TourScene({
             rotateSpeed={-0.35}
             dampingFactor={0.08}
             enableDamping
+          />
+          <WalkController
+            enabled
+            scene={scene}
+            onEnterDoorway={onEnterDoorway}
           />
         </>
       )}
@@ -494,18 +784,7 @@ export function TourViewer({
     cameraYawRef.current = yaw;
   }, []);
 
-  // Directional walk: find hotspot at given angle offset from current yaw
-  const walkToward = useCallback(
-    (angleOffset: number) => {
-      if (!scene || fading) return;
-      const yaw = cameraYawRef.current + angleOffset;
-      const target = findHotspotAtAngle(yaw);
-      if (target) navigate(target.sceneId);
-    },
-    [scene, fading, findHotspotAtAngle, navigate],
-  );
-
-  // Floor click handler: determine click position and walk forward if on lower half
+  // Floor click handler: click a doorway/floor area to walk into the nearest room.
   const handleCanvasClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
       if (!scene || fading) return;
@@ -554,38 +833,6 @@ export function TourViewer({
     setFading(false);
   }, [pendingScene]);
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (!scene || fading) return;
-      // W / ArrowUp → walk forward (toward center of view)
-      if (e.key === "ArrowUp" || e.key === "w" || e.key === "W") {
-        e.preventDefault();
-        walkToward(0);
-        return;
-      }
-      // S / ArrowDown → walk backward (opposite direction)
-      if (e.key === "ArrowDown" || e.key === "s" || e.key === "S") {
-        e.preventDefault();
-        walkToward(Math.PI);
-        return;
-      }
-      // D / ArrowRight → walk right
-      if (e.key === "ArrowRight" || e.key === "d" || e.key === "D") {
-        e.preventDefault();
-        walkToward(Math.PI / 2);
-        return;
-      }
-      // A / ArrowLeft → walk left
-      if (e.key === "ArrowLeft" || e.key === "a" || e.key === "A") {
-        e.preventDefault();
-        walkToward(-Math.PI / 2);
-        return;
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [scene, fading, walkToward]);
-
   const price = formatListPrice(manifest.property?.listPrice);
   const floor = manifest.floors[0];
   const hasSceneNavigation = manifest.scenes.length > 1;
@@ -625,6 +872,7 @@ export function TourViewer({
                 onNavigate={navigate}
                 primaryColor={primary}
                 onCameraYaw={setCameraYaw}
+                onEnterDoorway={navigate}
               />
             ) : null}
             <FadeController fading={fading} onDone={finishFade} />
@@ -808,7 +1056,7 @@ export function TourViewer({
               ? scene.mediaUrl.includes("navigation-proxy")
                 ? "Drag to look around the captured room"
                 : "Orbit mesh - scroll zoom - click markers to change rooms"
-              : "Drag to look · Click floor or press WASD/arrows to walk · Click markers to jump"}
+              : "Free-walk: hold W/A/S/D or arrows to move · Drag to look · Walk into a doorway to enter the next room · Click markers to jump"}
           </p>
         </div>
       </div>
