@@ -38,7 +38,7 @@ cuda_image = (
     modal.Image.from_registry(
         "nvidia/cuda:12.1.1-runtime-ubuntu22.04", add_python="3.11"
     )
-    .apt_install("wget", "git", "colmap", "libgl1", "libgomp1")
+    .apt_install("wget", "git", "colmap", "libgl1", "libgomp1", "xvfb")
     .pip_install(
         "torch==2.2.2",
         "numpy==1.26.4",
@@ -204,7 +204,8 @@ def colmap_dense_mesh(payload: dict):
     def run_colmap(args):
         env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
         r = subprocess.run(
-            ["colmap"] + args, cwd=work, capture_output=True, text=True, env=env
+            ["xvfb-run", "-a", "-s", "-screen 0 1024x768x24"] + ["colmap"] + args,
+            cwd=work, capture_output=True, text=True, env=env,
         )
         if r.returncode != 0:
             raise RuntimeError(f"colmap {' '.join(args[:1])} failed: {r.stderr[:400]}")
@@ -213,9 +214,11 @@ def colmap_dense_mesh(payload: dict):
     try:
         notify_callback(callback_url, {"stage": "features", "status": "running"})
         run_colmap(["feature_extractor", "--database_path", f"{work}/db.db",
-                    "--image_path", f"{work}/images", "--ImageReader.single_camera", "1"])
+                    "--image_path", f"{work}/images", "--ImageReader.single_camera", "1",
+                    "--SiftExtraction.use_gpu", "0"])
         matcher = "sequential_matcher" if n >= 12 else "exhaustive_matcher"
-        run_colmap([matcher, "--database_path", f"{work}/db.db"])
+        run_colmap([matcher, "--database_path", f"{work}/db.db",
+                    "--SiftMatching.use_gpu", "0"])
         notify_callback(callback_url, {"stage": "mapper", "status": "running"})
         os.makedirs(f"{work}/sparse", exist_ok=True)
         run_colmap(["mapper", "--database_path", f"{work}/db.db",
@@ -302,15 +305,17 @@ def train_gaussian_splat(payload: dict):
     try:
         env_offscreen = dict(os.environ, QT_QPA_PLATFORM="offscreen")
         notify_callback(callback_url, {"stage": "features", "status": "running"})
-        subprocess.run(["colmap", "feature_extractor", "--database_path", f"{work}/db.db",
-                        "--image_path", f"{work}/images", "--ImageReader.single_camera", "1"],
+        subprocess.run(["xvfb-run", "-a", "colmap", "feature_extractor", "--database_path", f"{work}/db.db",
+                        "--image_path", f"{work}/images", "--ImageReader.single_camera", "1",
+                        "--SiftExtraction.use_gpu", "0"],
                        cwd=work, check=True, capture_output=True, env=env_offscreen)
         matcher = "sequential_matcher" if n >= 12 else "exhaustive_matcher"
-        subprocess.run(["colmap", matcher, "--database_path", f"{work}/db.db"],
+        subprocess.run(["xvfb-run", "-a", "colmap", matcher, "--database_path", f"{work}/db.db",
+                        "--SiftMatching.use_gpu", "0"],
                        cwd=work, check=True, capture_output=True, env=env_offscreen)
         os.makedirs(f"{work}/sparse", exist_ok=True)
         notify_callback(callback_url, {"stage": "mapper", "status": "running"})
-        subprocess.run(["colmap", "mapper", "--database_path", f"{work}/db.db",
+        subprocess.run(["xvfb-run", "-a", "colmap", "mapper", "--database_path", f"{work}/db.db",
                         "--image_path", f"{work}/images", "--output_path", f"{work}/sparse"],
                        cwd=work, check=True, capture_output=True, env=env_offscreen)
         if not os.path.exists(f"{work}/sparse/0"):
