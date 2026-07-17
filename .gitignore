@@ -17,3 +17,9 @@ tmp
 *.tsbuildinfo
 derived
 dump.rdb
+
+# Modal CLI venv (Python, not committed)
+.venv-modal/
+
+# Modal webhook secret (local, not committed)
+.modal_secret
