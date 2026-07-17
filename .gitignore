@@ -23,3 +23,6 @@ dump.rdb
 
 # Modal webhook secret (local, not committed)
 .modal_secret
+
+# Modal Python build artifacts
+__pycache__/

@@ -10,6 +10,7 @@ import {
   useTexture,
 } from "@react-three/drei";
 import { createXRStore, XR } from "@react-three/xr";
+import { SplatViewer } from "./SplatViewer";
 import {
   type ComponentRef,
   Suspense,
@@ -600,6 +601,21 @@ function TourScene({
     scene.kind === "mesh" ||
     scene.mediaUrl.toLowerCase().endsWith(".glb") ||
     scene.mediaUrl.toLowerCase().includes(".glb");
+
+  const isSplat =
+    scene.kind === "splat" ||
+    scene.mediaUrl.toLowerCase().endsWith(".ply") ||
+    scene.mediaUrl.toLowerCase().includes("gaussian-splat");
+
+  if (isSplat) {
+    return (
+      <SplatViewer
+        url={scene.mediaUrl}
+        initialYaw={scene.initialYaw ?? 0}
+        initialPitch={scene.initialPitch ?? 0}
+      />
+    );
+  }
 
   return (
     <>

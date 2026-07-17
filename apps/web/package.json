@@ -33,6 +33,7 @@
     "sharp": "^0.34.0",
     "stripe": "^18.0.0",
     "three": "^0.175.0",
+    "@mkkellogg/gaussian-splats-3d": "^0.4.7",
     "zod": "^3.24.0"
   },
   "devDependencies": {

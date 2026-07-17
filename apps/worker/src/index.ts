@@ -1,5 +1,12 @@
 import { loadEnv, prisma } from "@housetour/db";
-import { processTourPipeline, JobCancelledError, type ProcessMode } from "@housetour/pipeline";
+import {
+  processTourPipeline,
+  JobCancelledError,
+  type ProcessMode,
+  runModalReconstruction,
+  gatherCaptureFrames,
+  uploadDerivedObject,
+} from "@housetour/pipeline";
 import { Worker } from "bullmq";
 
 loadEnv();
@@ -22,6 +29,76 @@ const worker = new Worker(
         : "pano";
     console.log(`[worker] ${processMode} tour ${tourId} job ${jobId}`);
     try {
+      // GPU path: if Modal is configured and we have real capture frames,
+      // run real COLMAP-dense / Gaussian Splatting reconstruction on Modal.
+      if (processMode === "photogrammetry") {
+        const tour = await prisma.tour.findUnique({
+          where: { id: tourId },
+          include: { assets: { where: { kind: "MULTI_VIEW" }, select: { storageKey: true } } },
+        });
+        const frameKeys = tour?.assets.map((a) => a.storageKey).filter(Boolean) as string[];
+        if (frameKeys.length >= 2) {
+          const engine = process.env.RECON_ENGINE === "splat" ? "splat" : "colmap";
+          const frames = await gatherCaptureFrames(frameKeys);
+          const modal = await runModalReconstruction({
+            jobId,
+            tourId,
+            orgId: tour!.organizationId,
+            engine,
+            frames,
+            uploadFrames: (key, body) =>
+              uploadDerivedObject({
+                key,
+                body,
+                contentType: engine === "splat" ? "application/x-ply" : "model/gltf-binary",
+              }),
+            callbackUrl: `${process.env.APP_BASE_URL ?? ""}/api/jobs/${jobId}/modal-callback`,
+          });
+          if (modal.used) {
+            await prisma.$transaction(async (tx) => {
+              const floor =
+                (await tx.floor.findFirst({ where: { tourId } })) ??
+                (await tx.floor.create({ data: { tourId, name: "Main Level", sortOrder: 0 } }));
+              await tx.tourAsset.create({
+                data: {
+                  tourId,
+                  captureSessionId,
+                  kind: modal.assetKind,
+                  filename: modal.sceneKind === "SPLAT" ? "gaussian-splat.ply" : "navigation-proxy.glb",
+                  contentType: modal.sceneKind === "SPLAT" ? "application/x-ply" : "model/gltf-binary",
+                  sizeBytes: 0n,
+                  storageKey: modal.storageKey,
+                  publicUrl: modal.mediaUrl,
+                  sortOrder: 0,
+                  meta: modal.engineMeta as any,
+                },
+              });
+              await tx.tourScene.create({
+                data: {
+                  tourId,
+                  floorId: floor.id,
+                  captureSessionId,
+                  name: modal.engine === "splat" ? "Gaussian Splatting Tour" : "Photoreal Mesh",
+                  kind: modal.sceneKind,
+                  mediaKey: modal.storageKey,
+                  mediaUrl: modal.mediaUrl,
+                  posterUrl: tour!.coverUrl,
+                  posX: 0.5,
+                  posY: 0,
+                  posZ: 0.5,
+                  initialYaw: 0,
+                  initialPitch: 0,
+                },
+              });
+            });
+            await prisma.tour.update({ where: { id: tourId }, data: { status: "READY" } });
+            console.log(`[worker] Modal ${modal.engine} done -> ${modal.mediaUrl}`);
+            return;
+          }
+          console.log("[worker] Modal unavailable/failed, falling back to CPU pipeline");
+        }
+      }
+
       await processTourPipeline(jobId, tourId, processMode, captureSessionId);
       console.log(`[worker] done ${tourId}`);
       } catch (err) {
