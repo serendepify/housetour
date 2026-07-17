@@ -35,9 +35,9 @@ export function getModalConfig(): ModalConfig | null {
 
 /** Build a ZIP of capture frame buffers. */
 export function buildFramesZip(frames: Buffer[]): Buffer {
-  // Lazy-load adm-zip to avoid a hard dep when Modal is unused.
-  const AdmZip = require("adm-zip");
-  const zip = new AdmZip();
+  // eslint-disable-next-line no-eval
+  const ADM = eval("require")("adm-zip");
+  const zip = new ADM();
   frames.forEach((buf, i) =>
     zip.addFile(`frame_${String(i).padStart(4, "0")}.jpg`, buf),
   );

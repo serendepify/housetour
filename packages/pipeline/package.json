@@ -19,6 +19,8 @@
     "@aws-sdk/client-s3": "^3.1086.0",
     "@housetour/db": "workspace:*",
     "@housetour/tour-engine": "workspace:*",
+    "@types/adm-zip": "^0.5.8",
+    "adm-zip": "^0.6.0",
     "sharp": "^0.34.0"
   },
   "devDependencies": {
