@@ -3,6 +3,7 @@ export type CaptureQuality = {
   sharpness: number;
   rating: "good" | "check" | "poor";
   issues: Array<"dark" | "bright" | "soft">;
+  overlapSimilarity?: number; // 0-100: 0=no overlap, 100=identical (ideal:50-85)
 };
 
 export type CaptureQualitySummary = {
@@ -119,4 +120,22 @@ export function reconstructionQualityMessage(
   }
 
   return `This scan is not strong enough for photogrammetry yet: ${reasons.join("; ")}.`;
+}
+
+/**
+ * Compare two same-sized pixel arrays and return a similarity percentage
+ * (0 = completely different, 100 = identical). Uses a downscaled grid for
+ * speed — call before capture to tell the user whether they've moved enough.
+ */
+export function pixelSimilarity(
+  a: Uint8ClampedArray,
+  b: Uint8ClampedArray,
+  len: number,
+): number {
+  let diff = 0;
+  for (let i = 0; i < len; i += 4) {
+    diff += Math.abs(a[i] - b[i]) + Math.abs(a[i + 1] - b[i + 1]) + Math.abs(a[i + 2] - b[i + 2]);
+  }
+  const maxDiff = (len / 4) * 3 * 255;
+  return maxDiff ? Math.round((1 - diff / maxDiff) * 100) : 100;
 }

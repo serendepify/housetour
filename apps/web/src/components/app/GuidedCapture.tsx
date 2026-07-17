@@ -17,6 +17,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   assessCaptureQuality,
   isCaptureReadyForReconstruction,
+  pixelSimilarity,
   reconstructionQualityMessage,
   summarizeCaptureQuality,
   type CaptureQuality,
@@ -48,7 +49,9 @@ function roomSlug(value: string) {
 }
 
 function qualityLabel(quality: CaptureQuality) {
-  if (quality.rating === "good") return "Ready";
+  if (quality.rating === "good") return quality.overlapSimilarity !== undefined
+    ? quality.overlapSimilarity > 90 ? "Same spot — move more" : "Good shot"
+    : "Ready";
   if (quality.issues.includes("soft")) return "Hold steady";
   if (quality.issues.includes("dark")) return "Too dark";
   if (quality.issues.includes("bright")) return "Too bright";
@@ -89,6 +92,7 @@ export function GuidedCapture({
   const wakeLockRef = useRef<{ release: () => Promise<void> } | null>(null);
   const previewsRef = useRef<string[]>([]);
   const frameSequenceRef = useRef(0);
+  const lastFramePixels = useRef<Uint8ClampedArray | null>(null);
 
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -239,6 +243,16 @@ export function GuidedCapture({
     sampleContext.drawImage(video, 0, 0, sample.width, sample.height);
     const pixels = sampleContext.getImageData(0, 0, sample.width, sample.height).data;
     const quality = assessCaptureQuality(pixels, sample.width, sample.height);
+
+    // Compare to the previous frame for photogrammetry overlap guidance.
+    if (lastFramePixels.current) {
+      quality.overlapSimilarity = pixelSimilarity(
+        lastFramePixels.current,
+        pixels,
+        pixels.length,
+      );
+    }
+    lastFramePixels.current = pixels;
     const blob = await new Promise<Blob | null>((resolve) =>
       canvas.toBlob(resolve, "image/jpeg", 0.9),
     );
@@ -434,8 +448,17 @@ export function GuidedCapture({
     frames.length < 3
       ? "Start at the doorway and include the floor and ceiling."
       : frames.length < Math.ceil(targetFrameCount * 0.65)
-        ? "Walk the perimeter. Keep most of the previous view in each frame."
+        ? "Walk the perimeter. Keep 60% overlap between shots — each new frame should still see most of the last one."
         : "Finish corners, windows, and transitions into the next room.";
+
+  const overlapTip =
+    frames.length > 0 && frames.at(-1)?.quality.overlapSimilarity !== undefined
+      ? frames.at(-1)!.quality.overlapSimilarity! > 90
+        ? "⚠ You haven't moved far enough from the last shot."
+        : frames.at(-1)!.quality.overlapSimilarity! < 35
+          ? "⚠ Too much change — step back closer to the last position."
+          : "✓ Good overlap with previous frame."
+      : null;
 
   return (
     <div
@@ -563,6 +586,11 @@ export function GuidedCapture({
                   {frames.length}/{targetFrameCount}
                 </p>
               </div>
+              {overlapTip ? (
+                <p className={`mt-1.5 text-xs ${overlapTip.startsWith("\u2713") ? "text-emerald-300" : "text-amber-300"}`}>
+                  {overlapTip}
+                </p>
+              ) : null}
               <div className="mt-3 flex gap-1" aria-label={`${frames.length} of ${targetFrameCount} frames`}>
                 {Array.from({ length: targetFrameCount }, (_, index) => (
                   <span

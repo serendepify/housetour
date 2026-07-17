@@ -178,7 +178,8 @@ def colmap_dense_mesh(payload: dict):
         return Response("unauthorized", status_code=401)
 
     job_id = payload["jobId"]
-    frames_url = payload["framesUrl"]
+    frames_url = payload.get("framesUrl") or ""
+    frames_base64 = payload.get("framesBase64")  # fallback: inline base64 JPGs
     callback_url = payload.get("callbackUrl")
     tour_id = payload.get("tourId", "unknown")
     base = f"orgs/{payload.get('orgId','org')}/tours/{tour_id}/derived/{job_id}"
@@ -186,13 +187,24 @@ def colmap_dense_mesh(payload: dict):
     work = f"/tmp/colmap_{job_id}"
     os.system(f"rm -rf {work} && mkdir -p {work}/images")
     notify_callback(callback_url, {"stage": "download", "status": "running"})
-    n = download_frames(frames_url, f"{work}/images")
+
+    # Accept frames inline (base64 array) when frames_url is unreachable
+    import base64 as b64
+    if frames_base64 and isinstance(frames_base64, list) and len(frames_base64) >= 2:
+        for i, b in enumerate(frames_base64):
+            raw = b64.b64decode(b)
+            with open(f"{work}/images/frame_{i:04d}.jpg", "wb") as fh:
+                fh.write(raw)
+        n = len(frames_base64)
+    else:
+        n = download_frames(frames_url, f"{work}/images")
     if n < 2:
         return {"ok": False, "error": "need >=2 frames", "frames": n}
 
     def run_colmap(args):
+        env = dict(os.environ, QT_QPA_PLATFORM="offscreen")
         r = subprocess.run(
-            ["colmap"] + args, cwd=work, capture_output=True, text=True
+            ["colmap"] + args, cwd=work, capture_output=True, text=True, env=env
         )
         if r.returncode != 0:
             raise RuntimeError(f"colmap {' '.join(args[:1])} failed: {r.stderr[:400]}")
@@ -263,7 +275,8 @@ def train_gaussian_splat(payload: dict):
         return Response("unauthorized", status_code=401)
 
     job_id = payload["jobId"]
-    frames_url = payload["framesUrl"]
+    frames_url = payload.get("framesUrl") or ""
+    frames_base64 = payload.get("framesBase64")
     callback_url = payload.get("callbackUrl")
     tour_id = payload.get("tourId", "unknown")
     base = f"orgs/{payload.get('orgId','org')}/tours/{tour_id}/derived/{job_id}"
@@ -271,25 +284,35 @@ def train_gaussian_splat(payload: dict):
     work = f"/tmp/splat_{job_id}"
     os.system(f"rm -rf {work} && mkdir -p {work}/images")
     notify_callback(callback_url, {"stage": "download", "status": "running"})
-    n = download_frames(frames_url, f"{work}/images")
+
+    import base64 as b64
+    if frames_base64 and isinstance(frames_base64, list) and len(frames_base64) >= 2:
+        for i, b in enumerate(frames_base64):
+            raw = b64.b64decode(b)
+            with open(f"{work}/images/frame_{i:04d}.jpg", "wb") as fh:
+                fh.write(raw)
+        n = len(frames_base64)
+    else:
+        n = download_frames(frames_url, f"{work}/images")
     if n < 2:
         return {"ok": False, "error": "need >=2 frames", "frames": n}
 
     # Use nerfstudio-style colmap + gsplat training. gsplat ships a training
     # example; we run COLMAP (already in image) for poses then gsplat.
     try:
+        env_offscreen = dict(os.environ, QT_QPA_PLATFORM="offscreen")
         notify_callback(callback_url, {"stage": "features", "status": "running"})
         subprocess.run(["colmap", "feature_extractor", "--database_path", f"{work}/db.db",
                         "--image_path", f"{work}/images", "--ImageReader.single_camera", "1"],
-                       cwd=work, check=True, capture_output=True)
+                       cwd=work, check=True, capture_output=True, env=env_offscreen)
         matcher = "sequential_matcher" if n >= 12 else "exhaustive_matcher"
         subprocess.run(["colmap", matcher, "--database_path", f"{work}/db.db"],
-                       cwd=work, check=True, capture_output=True)
+                       cwd=work, check=True, capture_output=True, env=env_offscreen)
         os.makedirs(f"{work}/sparse", exist_ok=True)
         notify_callback(callback_url, {"stage": "mapper", "status": "running"})
         subprocess.run(["colmap", "mapper", "--database_path", f"{work}/db.db",
                         "--image_path", f"{work}/images", "--output_path", f"{work}/sparse"],
-                       cwd=work, check=True, capture_output=True)
+                       cwd=work, check=True, capture_output=True, env=env_offscreen)
         if not os.path.exists(f"{work}/sparse/0"):
             return {"ok": False, "error": "mapping failed (insufficient overlap?)"}
         # Convert COLMAP model to transforms.json (nerfstudio) for gsplat.
