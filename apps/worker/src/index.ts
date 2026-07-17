@@ -1,5 +1,5 @@
 import { loadEnv, prisma } from "@housetour/db";
-import { processTourPipeline, type ProcessMode } from "@housetour/pipeline";
+import { processTourPipeline, JobCancelledError, type ProcessMode } from "@housetour/pipeline";
 import { Worker } from "bullmq";
 
 loadEnv();
@@ -24,8 +24,22 @@ const worker = new Worker(
     try {
       await processTourPipeline(jobId, tourId, processMode, captureSessionId);
       console.log(`[worker] done ${tourId}`);
-    } catch (err) {
+      } catch (err) {
       const message = err instanceof Error ? err.message : "Processing failed";
+      if (err instanceof JobCancelledError) {
+        console.log(`[worker] cancelled ${tourId}`);
+        await prisma.processingJob.update({
+          where: { id: jobId },
+          data: { status: "CANCELLED", finishedAt: new Date() },
+        });
+        // Leave any scenes already built; don't mark the whole tour failed.
+        const sceneCount = await prisma.tourScene.count({ where: { tourId } });
+        await prisma.tour.update({
+          where: { id: tourId },
+          data: { status: sceneCount > 0 ? "READY" : "DRAFT" },
+        });
+        return;
+      }
       console.error(`[worker] failed ${tourId}`, message);
       await prisma.processingJob.update({
         where: { id: jobId },

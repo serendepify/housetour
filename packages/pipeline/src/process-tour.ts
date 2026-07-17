@@ -25,6 +25,22 @@ import {
 import { downloadSourceObject, uploadDerivedObject } from "./storage";
 import type { Vec3 } from "./glb-builder";
 
+export class JobCancelledError extends Error {
+  constructor() {
+    super("Job cancelled");
+    this.name = "JobCancelledError";
+  }
+}
+
+/** Returns true when the processing job has been marked CANCELLED in the DB. */
+async function isJobCancelled(jobId: string): Promise<boolean> {
+  const job = await prisma.processingJob.findUnique({
+    where: { id: jobId },
+    select: { status: true },
+  });
+  return job?.status === "CANCELLED";
+}
+
 async function setStages(
   jobId: string,
   stages: StageState[],
@@ -48,6 +64,9 @@ async function runStage(
   id: StageId,
   fn: () => Promise<string | void>,
 ) {
+  if (await isJobCancelled(jobId)) {
+    throw new JobCancelledError();
+  }
   const idx = stages.findIndex((s) => s.id === id);
   stages[idx] = {
     ...stages[idx],

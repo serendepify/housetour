@@ -302,6 +302,24 @@ export function TourStudio({
     }
   }
 
+  async function cancelBuild(jobId: string) {
+    setBusyAction(`cancel-${jobId}`);
+    setNotice(null);
+    try {
+      const response = await fetch(`/api/tours/${tour.id}/process/${jobId}/cancel`, {
+        method: "POST",
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error ?? "Could not cancel build");
+      setNotice({ tone: "info", text: "Room build cancelled." });
+      refresh();
+    } catch (error) {
+      setNotice({ tone: "error", text: error instanceof Error ? error.message : "Could not cancel build" });
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
   async function importRoom() {
     if (!selectedImport) return;
     setBusyAction("import-room");
@@ -544,7 +562,11 @@ export function TourStudio({
                         </div>
                       </div>
                       <div className="flex shrink-0 items-center gap-2 pl-[52px] sm:pl-0">
-                        {scene ? (
+                        {active && job ? (
+                          <button type="button" disabled={busyAction !== null} onClick={() => void cancelBuild(job.id)} className="inline-flex h-9 items-center gap-2 rounded-lg border border-red-300 px-3 text-xs font-bold text-red-700 hover:bg-red-50 disabled:opacity-40">
+                            <X size={14} /> Cancel
+                          </button>
+                        ) : scene ? (
                           <Link href={`/app/tours/${tour.id}/preview?scene=${scene.id}`} target="_blank" className="inline-flex h-9 items-center gap-2 rounded-lg border border-ink-900/15 px-3 text-xs font-bold text-ink-800 hover:bg-ink-100">
                             <Play size={14} /> Explore
                           </Link>

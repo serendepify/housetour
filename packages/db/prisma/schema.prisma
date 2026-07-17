@@ -74,6 +74,7 @@ enum JobStatus {
   RUNNING
   SUCCEEDED
   FAILED
+  CANCELLED
 }
 
 enum AnalyticsEventType {
