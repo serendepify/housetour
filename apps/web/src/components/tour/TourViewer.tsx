@@ -174,7 +174,7 @@ function FadeController({
       return;
     }
     t.current += delta;
-    if (t.current > 0.35) onDone();
+    if (t.current > 0.18) onDone();
   });
   return null;
 }
@@ -903,8 +903,8 @@ export function TourViewer({
       </div>
 
       <div
-        className="pointer-events-none absolute inset-0 bg-black transition-opacity duration-300"
-        style={{ opacity: fading ? 0.55 : 0 }}
+        className="pointer-events-none absolute inset-0 bg-black transition-opacity duration-200"
+        style={{ opacity: fading ? 0.35 : 0 }}
       />
 
       {/* Walk indicator — ripple at click position */}
