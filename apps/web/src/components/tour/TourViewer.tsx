@@ -296,8 +296,11 @@ function MeshWalkRoom({
       camera.rotation.order = "YXZ";
       camera.rotation.set(initialPitch, initialYaw, 0);
     } else {
-      camera.position.set(5.5, 3.2, 5.5);
-      controls?.target.set(0, 0.4, 0);
+      // Reconstructed room: start at room center, eye height, looking inward.
+      camera.position.set(0, 1.6, 1.8);
+      camera.rotation.order = "YXZ";
+      camera.rotation.set(initialPitch, initialYaw, 0);
+      controls?.target.set(0, 1.2, -2);
     }
     if (camera instanceof THREE.PerspectiveCamera) {
       camera.fov = isCaptureGallery ? 58 : 75;
