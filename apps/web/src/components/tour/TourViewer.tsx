@@ -3,6 +3,7 @@
 import type { TourManifest } from "@housetour/api-contract";
 import { formatListPrice, sphericalToCartesian } from "@housetour/tour-engine";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { useSearchParams } from "next/navigation";
 import {
   Html,
   OrbitControls,
@@ -740,7 +741,12 @@ export function TourViewer({
   onSceneChange,
   className,
 }: Props) {
-  const startId = manifest.startSceneId || manifest.scenes[0]?.id;
+  const searchParams = useSearchParams();
+  const sceneFromQuery = searchParams.get("scene");
+  const resolvedStartId = sceneFromQuery
+    ? (manifest.scenes.find((s) => s.id === sceneFromQuery)?.id ?? null)
+    : null;
+  const startId = resolvedStartId || manifest.startSceneId || manifest.scenes[0]?.id;
   const [sceneId, setSceneId] = useState(startId);
   const [fading, setFading] = useState(false);
   const [pendingScene, setPendingScene] = useState<string | null>(null);
