@@ -160,25 +160,6 @@ function SceneCamera({
   return null;
 }
 
-function FadeController({
-  fading,
-  onDone,
-}: {
-  fading: boolean;
-  onDone: () => void;
-}) {
-  const t = useRef(0);
-  useFrame((_, delta) => {
-    if (!fading) {
-      t.current = 0;
-      return;
-    }
-    t.current += delta;
-    if (t.current > 0.18) onDone();
-  });
-  return null;
-}
-
 function CaptureLookControls({
   initialYaw = 0,
   initialPitch = 0,
@@ -745,8 +726,6 @@ export function TourViewer({
     : null;
   const startId = resolvedStartId || manifest.startSceneId || manifest.scenes[0]?.id;
   const [sceneId, setSceneId] = useState(startId);
-  const [fading, setFading] = useState(false);
-  const [pendingScene, setPendingScene] = useState<string | null>(null);
   const [vrSupported, setVrSupported] = useState(false);
   const [infoOpen, setInfoOpen] = useState(mode === "public");
   const [walkTarget, setWalkTarget] = useState<{ x: number; y: number } | null>(null);
@@ -760,11 +739,10 @@ export function TourViewer({
 
   const navigate = useCallback(
     (nextId: string) => {
-      if (nextId === sceneId || fading) return;
-      setPendingScene(nextId);
-      setFading(true);
+      if (nextId === sceneId) return;
+      setSceneId(nextId);
     },
-    [sceneId, fading],
+    [sceneId],
   );
 
   const sceneMap = useMemo(() => {
@@ -809,7 +787,7 @@ export function TourViewer({
   // Floor click handler: click a doorway/floor area to walk into the nearest room.
   const handleCanvasClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
-      if (!scene || fading) return;
+      if (!scene) return;
       const rect = e.currentTarget.getBoundingClientRect();
       const x = (e.clientX - rect.left) / rect.width;
       const y = (e.clientY - rect.top) / rect.height;
@@ -827,7 +805,7 @@ export function TourViewer({
       const target = findHotspotAtAngle(clickYaw);
       if (target) navigate(target.sceneId);
     },
-    [scene, fading, findHotspotAtAngle, navigate],
+    [scene, findHotspotAtAngle, navigate],
   );
 
   useEffect(() => {
@@ -846,14 +824,6 @@ export function TourViewer({
   useEffect(() => {
     if (sceneId) onSceneChange?.(sceneId);
   }, [sceneId, onSceneChange]);
-
-  const finishFade = useCallback(() => {
-    if (pendingScene) {
-      setSceneId(pendingScene);
-      setPendingScene(null);
-    }
-    setFading(false);
-  }, [pendingScene]);
 
   const price = formatListPrice(manifest.property?.listPrice);
   const floor = manifest.floors[0];
@@ -897,15 +867,9 @@ export function TourViewer({
                 onEnterDoorway={navigate}
               />
             ) : null}
-            <FadeController fading={fading} onDone={finishFade} />
           </XR>
         </Canvas>
       </div>
-
-      <div
-        className="pointer-events-none absolute inset-0 bg-black transition-opacity duration-200"
-        style={{ opacity: fading ? 0.35 : 0 }}
-      />
 
       {/* Walk indicator — ripple at click position */}
       {walkTarget ? (

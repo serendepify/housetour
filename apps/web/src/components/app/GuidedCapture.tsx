@@ -63,7 +63,6 @@ export function GuidedCapture({
   tourId,
   tourTitle,
   assetOffset,
-  allowPhotogrammetry,
   onClose,
   onComplete,
 }: {
@@ -71,7 +70,6 @@ export function GuidedCapture({
   tourId: string;
   tourTitle: string;
   assetOffset: number;
-  allowPhotogrammetry: boolean;
   onClose: () => void;
   onComplete: () => void;
 }) {
@@ -401,35 +399,33 @@ export function GuidedCapture({
         completedAt: new Date().toISOString(),
       });
       setPhase("done");
-      if (allowPhotogrammetry) {
-        if (reconstructionReady) {
-          try {
-            const buildResponse = await fetch(`/api/tours/${tourId}/process`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                mode: "photogrammetry",
-                captureSessionId: sessionId,
-              }),
-            });
-            const build = await buildResponse.json().catch(() => ({}));
-            if (!buildResponse.ok) {
-              throw new Error(build.error ?? "The room was saved, but its build could not start");
-            }
-            setBuildQueued(true);
-          } catch (buildQueueError) {
-            setBuildError(
-              buildQueueError instanceof Error
-                ? buildQueueError.message
-                : "The room was saved, but its build could not start",
-            );
+      if (reconstructionReady) {
+        try {
+          const buildResponse = await fetch(`/api/tours/${tourId}/process`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              mode: "photogrammetry",
+              captureSessionId: sessionId,
+            }),
+          });
+          const build = await buildResponse.json().catch(() => ({}));
+          if (!buildResponse.ok) {
+            throw new Error(build.error ?? "The room was saved, but its build could not start");
           }
-        } else {
+          setBuildQueued(true);
+        } catch (buildQueueError) {
           setBuildError(
-            reconstructionQualityMessage(summary) ??
-              "The room was saved, but its capture quality is not strong enough for photogrammetry yet.",
+            buildQueueError instanceof Error
+              ? buildQueueError.message
+              : "The room was saved, but its build could not start",
           );
         }
+      } else {
+        setBuildError(
+          reconstructionQualityMessage(summary) ??
+            "The room was saved, but its capture quality is not strong enough for photogrammetry yet.",
+        );
       }
       onComplete();
     } catch (uploadError) {
@@ -779,10 +775,8 @@ export function GuidedCapture({
           <h2 className="mt-2 font-display text-4xl">{roomName} is ready</h2>
           <p className="mt-3 text-sm leading-6 text-white/60">
             {buildQueued
-              ? `${frames.length} protected frames are uploaded. Your room build has started.`
-              : allowPhotogrammetry
-                ? `${frames.length} protected frames are uploaded and ready to build.`
-                : `${frames.length} protected frames are saved. Upgrade to Pro to build the room.`}
+              ? `${frames.length} frames uploaded. Your room build has started.`
+              : `${frames.length} frames are uploaded and ready for 3D reconstruction.`}
           </p>
           {buildError ? (
             <div className="mt-5 flex max-w-md gap-3 rounded-lg border border-amber-300/25 bg-amber-300/10 px-3 py-3 text-left text-sm text-amber-100">

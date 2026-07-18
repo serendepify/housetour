@@ -62,8 +62,7 @@ export default async function TourStudioPage({ params, searchParams }: Props) {
       ? await buildTourManifestById(tour.id, session.user.organizationId)
       : null;
 
-  const allowPhotogrammetry =
-    org?.subscription?.plan.allowPhotogrammetry ?? false;
+  // Always enable photogrammetry — MESH is the only reconstruction mode.
 
   return (
     <TourStudio
@@ -134,7 +133,6 @@ export default async function TourStudioPage({ params, searchParams }: Props) {
       }}
       manifest={manifest}
       appUrl={process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000"}
-      allowPhotogrammetry={allowPhotogrammetry}
       autoCapture={query.capture === "1"}
     />
   );

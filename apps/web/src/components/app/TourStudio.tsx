@@ -151,13 +151,11 @@ export function TourStudio({
   tour,
   manifest,
   appUrl,
-  allowPhotogrammetry,
   autoCapture = false,
 }: {
   tour: TourDTO;
   manifest: TourManifest | null;
   appUrl: string;
-  allowPhotogrammetry: boolean;
   autoCapture?: boolean;
 }) {
   const router = useRouter();
@@ -333,23 +331,21 @@ export function TourStudio({
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.error ?? "Could not import room scan");
 
-      if (allowPhotogrammetry) {
-        const buildResponse = await fetch(`/api/tours/${tour.id}/process`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            mode: "photogrammetry",
-            captureSessionId: data.captureSession.id,
-          }),
-        });
-        const build = await buildResponse.json().catch(() => ({}));
-        if (!buildResponse.ok) throw new Error(build.error ?? "Room copied, but its build could not start");
-      }
+      const buildResponse = await fetch(`/api/tours/${tour.id}/process`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: "photogrammetry",
+          captureSessionId: data.captureSession.id,
+        }),
+      });
+      const build = await buildResponse.json().catch(() => ({}));
+      if (!buildResponse.ok) throw new Error(build.error ?? "Room copied, but its build could not start");
 
       setImportOpen(false);
       setNotice({
         tone: "success",
-        text: allowPhotogrammetry ? "Room scan copied and queued for building." : "Room scan copied into this listing.",
+        text: "Room scan copied and queued for 3D reconstruction.",
       });
       refresh();
     } catch (error) {
@@ -480,7 +476,7 @@ export function TourStudio({
                   {latestStages?.find((stage) => stage.status === "running")?.label ?? "Queued for the reconstruction worker"}
                 </p>
               </div>
-            ) : nextReadyRoom && allowPhotogrammetry ? (
+            ) : nextReadyRoom ? (
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <p className="text-xs font-bold uppercase text-emerald-800">Ready to build</p>
@@ -570,7 +566,7 @@ export function TourStudio({
                           <Link href={`/app/tours/${tour.id}/preview?scene=${scene.id}`} target="_blank" className="inline-flex h-9 items-center gap-2 rounded-lg border border-ink-900/15 px-3 text-xs font-bold text-ink-800 hover:bg-ink-100">
                             <Play size={14} /> Explore
                           </Link>
-                        ) : capture.status === "READY" && allowPhotogrammetry ? (
+                        ) : capture.status === "READY"  ? (
                           <button type="button" disabled={active || busyAction !== null} onClick={() => void startBuild("photogrammetry", capture.id)} className="inline-flex h-9 items-center gap-2 rounded-lg bg-ink-950 px-3 text-xs font-bold text-white hover:bg-ink-800 disabled:opacity-40">
                             {busyAction === `build-${capture.id}` || active ? <LoaderCircle className="animate-spin" size={14} /> : <Play size={14} />}
                             {failed ? "Retry build" : active ? "Building" : "Build room"}
@@ -671,7 +667,7 @@ export function TourStudio({
           tourId={tour.id}
           tourTitle={tour.property?.title ?? tour.title}
           assetOffset={tour.assets.length}
-          allowPhotogrammetry={allowPhotogrammetry}
+          
           onClose={() => setCaptureOpen(false)}
           onComplete={refresh}
         />
