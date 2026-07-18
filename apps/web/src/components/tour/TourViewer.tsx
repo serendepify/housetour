@@ -1029,7 +1029,7 @@ export function TourViewer({
                   >
                     <span className="block font-medium">{s.name}</span>
                     <span className="text-[10px] uppercase tracking-wider text-white/45">
-                      {s.kind}
+                      {s.kind === "mesh" ? "3D walk" : s.kind}
                     </span>
                   </button>
                 ))}

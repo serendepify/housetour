@@ -75,6 +75,7 @@ export function GuidedCapture({
 }) {
   const [phase, setPhase] = useState<CapturePhase>("setup");
   const [roomName, setRoomName] = useState("");
+  const [roomType, setRoomType] = useState("Living Room");
   const [targetFrameCount, setTargetFrameCount] = useState<number>(18);
   const [frames, setFrames] = useState<CaptureFrame[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -180,6 +181,7 @@ export function GuidedCapture({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           roomName: roomName.trim(),
+          roomType,
           mode: "PERSPECTIVE",
           targetFrameCount,
           deviceInfo: {
@@ -222,6 +224,9 @@ export function GuidedCapture({
   async function captureFrame() {
     const video = videoRef.current;
     if (!video || !video.videoWidth || !cameraReady || frames.length >= targetFrameCount) return;
+
+    // Haptic feedback on mobile
+    try { navigator.vibrate?.(15); } catch { /* no haptics */ }
 
     const scale = Math.min(1, 1920 / Math.max(video.videoWidth, video.videoHeight));
     const width = Math.round(video.videoWidth * scale);
@@ -518,6 +523,24 @@ export function GuidedCapture({
             className="mt-2 h-12 w-full rounded-lg border border-white/15 bg-white/5 px-3 text-base text-white outline-none transition placeholder:text-white/30 focus:border-[#f2c14e] focus:ring-2 focus:ring-[#f2c14e]/20"
           />
 
+          <label className="mt-5 block text-sm font-medium">Room type</label>
+          <div className="mt-2 grid grid-cols-3 gap-2">
+            {["Living Room","Bedroom","Kitchen","Bathroom","Hallway","Other"].map((t) => (
+              <button
+                key={t}
+                type="button"
+                onClick={() => setRoomType(t)}
+                className={`h-10 rounded-lg border text-xs font-semibold transition ${
+                  roomType === t
+                    ? "border-[#f2c14e] bg-[#f2c14e] text-[#07100e]"
+                    : "border-white/15 bg-white/5 text-white/75 hover:bg-white/10"
+                }`}
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+
           <fieldset className="mt-6">
             <legend className="text-sm font-medium">Capture density</legend>
             <div className="mt-2 grid grid-cols-3 gap-2" role="group">
@@ -563,6 +586,17 @@ export function GuidedCapture({
 
       {phase === "camera" ? (
         <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-black">
+          {/* Fullscreen toggle */}
+          <button
+            type="button"
+            onClick={() => {
+              if (document.fullscreenElement) document.exitFullscreen();
+              else document.documentElement.requestFullscreen().catch(() => {});
+            }}
+            className="absolute right-4 top-4 z-20 rounded-lg bg-black/50 px-3 py-1.5 text-xs text-white/80 backdrop-blur hover:bg-black/70"
+          >
+            {typeof document !== "undefined" && document.fullscreenElement ? "Exit fullscreen" : "Fullscreen"}
+          </button>
           <video
             ref={videoRef}
             muted
