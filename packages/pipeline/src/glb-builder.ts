@@ -1,16 +1,6 @@
 /**
- * GLB builder for a navigable 3D room from a capture session.
- *
- * Produces an actual walkable room:
- *  - a textured floor slab
- *  - perimeter walls with the real capture photos mapped onto them, positioned
- *    around the room by each frame's layout yaw (so the photos form the room
- *    surfaces you walk past)
- *  - a ceiling
- *  - a doorway gap in one wall so rooms can connect
- *
- * Mesh names are stable so the viewer can treat "Floor" as walkable and every
- * other mesh as a wall collider (see MeshWalkRoom).
+ * Minimal glTF 2.0 binary (GLB) builder for room mesh from capture points.
+ * Produces a walkable floor + walls hull suitable for mesh mode in the viewer.
  */
 
 export type Vec3 = { x: number; y: number; z: number };
@@ -23,233 +13,140 @@ function writeU32(view: DataView, offset: number, value: number) {
   view.setUint32(offset, value, true);
 }
 
-type Part = { bytes: Uint8Array; offset: number; length: number };
-
-function buildGlb(json: Record<string, unknown>, bin: Uint8Array): Buffer {
-  const jsonBuf = Buffer.from(JSON.stringify(json));
-  const jsonPad = pad4(jsonBuf.length);
-  const jsonChunkLength = jsonBuf.length + jsonPad;
-  const binChunkLength = bin.byteLength;
-  const totalLength = 12 + 8 + jsonChunkLength + 8 + binChunkLength;
-  const out = Buffer.alloc(totalLength);
-  out.writeUInt32LE(0x46546c67, 0); // glTF
-  out.writeUInt32LE(2, 4);
-  out.writeUInt32LE(totalLength, 8);
-  out.writeUInt32LE(jsonChunkLength, 12);
-  out.writeUInt32LE(0x4e4f534a, 16); // JSON
-  jsonBuf.copy(out, 20);
-  for (let i = 0; i < jsonPad; i++) out[20 + jsonBuf.length + i] = 0x20;
-  const binStart = 20 + jsonChunkLength;
-  out.writeUInt32LE(binChunkLength, binStart);
-  out.writeUInt32LE(0x004e4942, binStart + 4); // BIN
-  Buffer.from(bin).copy(out, binStart + 8);
-  return out;
-}
-
+/**
+ * Build a simple extruded floorplan mesh from 2D capture points (normalized 0–1).
+ * Points become room centers; we build a floor slab + perimeter walls.
+ */
 export function buildRoomMeshGlb(
   points: Vec3[],
   options?: { wallHeight?: number; scale?: number; imagePanels?: Buffer[] },
 ) {
   const wallHeight = options?.wallHeight ?? 2.6;
   const scale = options?.scale ?? 12;
-  const imagePanels = (options?.imagePanels ?? []).slice(0, 24);
+  const imagePanels = options?.imagePanels?.slice(0, 12) ?? [];
 
-  // Use capture layout as the room outline. With <3 points fall back to a box.
-  const ring =
-    points.length >= 3
-      ? points
-      : [
-          { x: 0.15, y: 0, z: 0.15 },
-          { x: 0.85, y: 0, z: 0.15 },
-          { x: 0.85, y: 0, z: 0.85 },
-          { x: 0.15, y: 0, z: 0.85 },
-        ];
+  if (points.length === 0) {
+    points = [
+      { x: 0, y: 0, z: 0 },
+      { x: 1, y: 0, z: 0 },
+      { x: 1, y: 0, z: 1 },
+      { x: 0, y: 0, z: 1 },
+    ];
+  }
 
-  // World-space outline on the floor (Y-up), centred in the room volume.
-  const outline = ring.map((p) => ({
-    x: (p.x - 0.5) * scale,
-    z: (p.z - 0.5) * scale,
-  }));
+  const xs = points.map((p) => p.x);
+  const zs = points.map((p) => p.z);
+  const minX = Math.min(...xs) - 0.08;
+  const maxX = Math.max(...xs) + 0.08;
+  const minZ = Math.min(...zs) - 0.08;
+  const maxZ = Math.max(...zs) + 0.08;
+
+  // Floor corners in world space (Y-up)
+  const corners: Vec3[] = [
+    { x: (minX - 0.5) * scale, y: 0, z: (minZ - 0.5) * scale },
+    { x: (maxX - 0.5) * scale, y: 0, z: (minZ - 0.5) * scale },
+    { x: (maxX - 0.5) * scale, y: 0, z: (maxZ - 0.5) * scale },
+    { x: (minX - 0.5) * scale, y: 0, z: (maxZ - 0.5) * scale },
+  ];
 
   const positions: number[] = [];
   const normals: number[] = [];
-  const uvs: number[] = [];
   const indices: number[] = [];
-  const meshPrimitives: Array<{
-    attributes: Record<string, number>;
-    indices: number;
-    material: number;
-    mode: number;
-    name: string;
-  }> = [];
-  const materials: Array<Record<string, unknown>> = [
-    // 0: floor
-    {
-      name: "Floor",
-      pbrMetallicRoughness: { baseColorFactor: [0.32, 0.3, 0.28, 1], metallicFactor: 0, roughnessFactor: 0.95 },
-      doubleSided: true,
-    },
-    // 1: ceiling
-    {
-      name: "Ceiling",
-      pbrMetallicRoughness: { baseColorFactor: [0.9, 0.9, 0.92, 1], metallicFactor: 0, roughnessFactor: 1 },
-      doubleSided: true,
-    },
-    // 2: wall (untextured shell behind photo panels)
-    {
-      name: "Wall",
-      pbrMetallicRoughness: { baseColorFactor: [0.18, 0.2, 0.22, 1], metallicFactor: 0, roughnessFactor: 1 },
-      doubleSided: true,
-    },
-  ];
-  const images: Array<{ bufferView: number; mimeType: string; name: string }> = [];
-  const textures: Array<{ sampler: number; source: number }> = [];
 
-  let posAccCount = 0;
-  let currentMaterial = 2; // start photo materials after index 2
-
-  function pushVertex(p: Vec3, n: Vec3, uv: [number, number] = [0, 0]) {
+  function pushVertex(p: Vec3, n: Vec3) {
     positions.push(p.x, p.y, p.z);
     normals.push(n.x, n.y, n.z);
-    uvs.push(uv[0], uv[1]);
     return positions.length / 3 - 1;
   }
 
-  // Build each primitive's vertex range explicitly.
-  interface Prim {
-    material: number;
-    name: string;
-    startVertex: number;
-    vertCount: number;
-    startIndex: number;
-    indexCount: number;
-  }
-  const prims: Prim[] = [];
-
-  function addPrim(material: number, name: string, verts: Array<{ p: Vec3; n: Vec3; uv?: [number, number] }>, tris: number[]) {
-    const startVertex = positions.length / 3;
-    for (const v of verts) pushVertex(v.p, v.n, v.uv ?? [0, 0]);
-    const startIndex = indices.length;
-    for (const t of tris) indices.push(startVertex + t);
-    prims.push({
-      material,
-      name,
-      startVertex,
-      vertCount: verts.length,
-      startIndex,
-      indexCount: tris.length,
-    });
-  }
-
-  // --- Floor ---
+  // Floor (up)
   {
     const n = { x: 0, y: 1, z: 0 };
-    const verts = outline.map((c) => ({ p: { x: c.x, y: 0, z: c.z }, n }));
-    const tris: number[] = [];
-    for (let i = 1; i < verts.length - 1; i++) tris.push(0, i, i + 1);
-    addPrim(0, "Floor", verts, tris);
+    const a = pushVertex(corners[0], n);
+    const b = pushVertex(corners[1], n);
+    const c = pushVertex(corners[2], n);
+    const d = pushVertex(corners[3], n);
+    indices.push(a, b, c, a, c, d);
   }
 
-  // --- Ceiling ---
+  // Ceiling (down-facing from outside, up normal for interior)
   {
     const n = { x: 0, y: -1, z: 0 };
-    const verts = outline.map((c) => ({ p: { x: c.x, y: wallHeight, z: c.z }, n }));
-    const tris: number[] = [];
-    for (let i = 1; i < verts.length - 1; i++) tris.push(0, i + 1, i);
-    addPrim(1, "Ceiling", verts, tris);
+    const top = corners.map((c) => ({ x: c.x, y: wallHeight, z: c.z }));
+    const a = pushVertex(top[0], n);
+    const b = pushVertex(top[1], n);
+    const c = pushVertex(top[2], n);
+    const d = pushVertex(top[3], n);
+    indices.push(a, c, b, a, d, c);
   }
 
-  // --- Walls (perimeter) with a doorway gap on the first edge ---
-  const segments = outline.length;
-  const doorwayEdge = 0; // leave a gap in the first wall segment
-  for (let s = 0; s < segments; s++) {
-    const a = outline[s];
-    const b = outline[(s + 1) % segments];
-    const n = { x: -(b.z - a.z), y: 0, z: b.x - a.x };
-    const len = Math.hypot(n.x, n.z) || 1;
-    n.x /= len; n.z /= len;
+  // Walls
+  const edges = [
+    [0, 1, { x: 0, y: 0, z: -1 }],
+    [1, 2, { x: 1, y: 0, z: 0 }],
+    [2, 3, { x: 0, y: 0, z: 1 }],
+    [3, 0, { x: -1, y: 0, z: 0 }],
+  ] as const;
 
-    const bl = { x: a.x, y: 0, z: a.z };
-    const br = { x: b.x, y: 0, z: b.z };
-    const tl = { x: a.x, y: wallHeight, z: a.z };
-    const tr = { x: b.x, y: wallHeight, z: b.z };
+  for (const [i0, i1, n] of edges) {
+    const bl = corners[i0];
+    const br = corners[i1];
+    const tl = { x: bl.x, y: wallHeight, z: bl.z };
+    const tr = { x: br.x, y: wallHeight, z: br.z };
+    const a = pushVertex(bl, n);
+    const b = pushVertex(br, n);
+    const c = pushVertex(tr, n);
+    const d = pushVertex(tl, n);
+    indices.push(a, b, c, a, c, d);
+  }
 
-    if (s === doorwayEdge) {
-      // Doorway: two short wall stubs leaving a central opening ~1.1m wide.
-      const dx = (br.x - bl.x) / len;
-      const dz = (br.z - bl.z) / len;
-      const open = 1.1; // metres
-      const stub = (len - open) / 2;
-      const doorTop = Math.min(2.05, wallHeight);
-      const seg = (t0: number, t1: number) => {
-        const p0 = { x: bl.x + dx * t0, y: 0, z: bl.z + dz * t0 };
-        const p1 = { x: bl.x + dx * t1, y: 0, z: bl.z + dz * t1 };
-        const q0 = { x: p0.x, y: doorTop, z: p0.z };
-        const q1 = { x: p1.x, y: doorTop, z: p1.z };
-        const verts = [
-          { p: p0, n }, { p: p1, n }, { p: q1, n }, { p: q0, n },
-        ];
-        addPrim(2, "Wall", verts, [0, 1, 2, 0, 2, 3]);
-      };
-      seg(0, stub);
-      seg(stub + open, len);
-    } else {
-      const verts = [
-        { p: bl, n }, { p: br, n }, { p: tr, n }, { p: tl, n },
-      ];
-      addPrim(2, "Wall", verts, [0, 1, 2, 0, 2, 3]);
+  // Capture marker discs (small platforms) for each point
+  for (const p of points) {
+    const cx = (p.x - 0.5) * scale;
+    const cz = (p.z - 0.5) * scale;
+    const r = 0.35;
+    const n = { x: 0, y: 1, z: 0 };
+    const center = pushVertex({ x: cx, y: 0.02, z: cz }, n);
+    const ring: number[] = [];
+    const segs = 12;
+    for (let i = 0; i < segs; i++) {
+      const a = (i / segs) * Math.PI * 2;
+      ring.push(
+        pushVertex(
+          { x: cx + Math.cos(a) * r, y: 0.02, z: cz + Math.sin(a) * r },
+          n,
+        ),
+      );
+    }
+    for (let i = 0; i < segs; i++) {
+      indices.push(center, ring[i], ring[(i + 1) % segs]);
     }
   }
 
-  // --- Photo panels on the walls, positioned by each capture's yaw ---
-  // Map each image to a point on the perimeter at the capture's layout angle.
-  const photoCount = imagePanels.length;
-  for (let i = 0; i < photoCount; i++) {
-    const pt = ring[i] ?? ring[Math.floor((i / Math.max(photoCount, 1)) * ring.length)];
-    const wx = (pt.x - 0.5) * scale;
-    const wz = (pt.z - 0.5) * scale;
-    // inward normal (toward room centre)
-    const cx = 0;
-    const cz = 0;
-    let nx = cx - wx;
-    let nz = cz - wz;
-    const nl = Math.hypot(nx, nz) || 1;
-    nx /= nl; nz /= nl;
-    const panelW = Math.min(2.4, (2 * Math.PI * Math.hypot(wx, wz)) / Math.max(photoCount, 6) - 0.2);
-    const panelH = 1.8;
-    const cy = 1.25;
-    const ox = -nz; // tangent
-    const oz = nx;
-    const off = panelW / 2;
-    const bl = { x: wx + ox * off, y: cy - panelH / 2, z: wz + oz * off };
-    const br = { x: wx - ox * off, y: cy - panelH / 2, z: wz - oz * off };
-    const tr = { x: wx - ox * off, y: cy + panelH / 2, z: wz - oz * off };
-    const tl = { x: wx + ox * off, y: cy + panelH / 2, z: wz + oz * off };
-    const n = { x: nx, y: 0, z: nz };
-    const verts = [
-      { p: bl, n, uv: [0, 0] as [number, number] },
-      { p: br, n, uv: [1, 0] as [number, number] },
-      { p: tr, n, uv: [1, 1] as [number, number] },
-      { p: tl, n, uv: [0, 1] as [number, number] },
-    ];
-    addPrim(3 + i, `Photo${String(i + 1).padStart(2, "0")}`, verts, [0, 1, 2, 0, 2, 3]);
+  const posBuffer = new Float32Array(positions);
+  const normBuffer = new Float32Array(normals);
+  const indexBuffer = new Uint16Array(indices);
+  const planePositionBuffer = new Float32Array([
+    -1.6, -0.9, 0,
+    1.6, -0.9, 0,
+    1.6, 0.9, 0,
+    -1.6, 0.9, 0,
+  ]);
+  const planeNormalBuffer = new Float32Array([
+    0, 0, 1,
+    0, 0, 1,
+    0, 0, 1,
+    0, 0, 1,
+  ]);
+  const planeUvBuffer = new Float32Array([
+    0, 1,
+    1, 1,
+    1, 0,
+    0, 0,
+  ]);
+  const planeIndexBuffer = new Uint16Array([0, 1, 2, 0, 2, 3]);
 
-    // add a textured material + image/texture for this panel
-    materials.push({
-      name: `PhotoMaterial${String(i + 1).padStart(2, "0")}`,
-      pbrMetallicRoughness: { baseColorTexture: { index: i }, metallicFactor: 0, roughnessFactor: 1 },
-      doubleSided: true,
-    });
-    images.push({ bufferView: 0, mimeType: "image/jpeg", name: `CaptureFrame${String(i + 1).padStart(2, "0")}` });
-    textures.push({ sampler: 0, source: i });
-  }
-
-  // --- Build binary buffers (positions, normals, uvs, indices, images) ---
-  const posArr = new Float32Array(positions);
-  const normArr = new Float32Array(normals);
-  const uvArr = new Float32Array(uvs);
-  const idxArr = new Uint32Array(indices);
-
+  type Part = { bytes: Uint8Array; offset: number; length: number };
   const parts: Part[] = [];
   let binLength = 0;
   function addPart(bytes: Uint8Array) {
@@ -259,76 +156,197 @@ export function buildRoomMeshGlb(
     return part;
   }
 
-  const posPart = addPart(new Uint8Array(posArr.buffer, posArr.byteOffset, posArr.byteLength));
-  const normPart = addPart(new Uint8Array(normArr.buffer, normArr.byteOffset, normArr.byteLength));
-  const uvPart = addPart(new Uint8Array(uvArr.buffer, uvArr.byteOffset, uvArr.byteLength));
-  const idxPart = addPart(new Uint8Array(idxArr.buffer, idxArr.byteOffset, idxArr.byteLength));
-  const imageParts = imagePanels.map((img) => addPart(new Uint8Array(img)));
+  const posPart = addPart(new Uint8Array(posBuffer.buffer));
+  const normPart = addPart(new Uint8Array(normBuffer.buffer));
+  const indexPart = addPart(new Uint8Array(indexBuffer.buffer));
+  const planePositionPart = imagePanels.length
+    ? addPart(new Uint8Array(planePositionBuffer.buffer))
+    : null;
+  const planeNormalPart = imagePanels.length
+    ? addPart(new Uint8Array(planeNormalBuffer.buffer))
+    : null;
+  const planeUvPart = imagePanels.length
+    ? addPart(new Uint8Array(planeUvBuffer.buffer))
+    : null;
+  const planeIndexPart = imagePanels.length
+    ? addPart(new Uint8Array(planeIndexBuffer.buffer))
+    : null;
+  const imageParts = imagePanels.map((image) => addPart(new Uint8Array(image)));
 
-  // Shared bufferViews: POSITION, NORMAL, TEXCOORD_0, INDICES (each primitive
-  // references a sub-range of these via its own accessors).
   const bufferViews: Array<Record<string, number>> = [
     { buffer: 0, byteOffset: posPart.offset, byteLength: posPart.length, target: 34962 },
     { buffer: 0, byteOffset: normPart.offset, byteLength: normPart.length, target: 34962 },
-    { buffer: 0, byteOffset: uvPart.offset, byteLength: uvPart.length, target: 34962 },
-    { buffer: 0, byteOffset: idxPart.offset, byteLength: idxPart.length, target: 34963 },
+    { buffer: 0, byteOffset: indexPart.offset, byteLength: indexPart.length, target: 34963 },
   ];
-  const imgBaseView = bufferViews.length;
-  imageParts.forEach((p) => bufferViews.push({ buffer: 0, byteOffset: p.offset, byteLength: p.length }));
-  images.forEach((img, i) => (img.bufferView = imgBaseView + i));
-
-  // Accessors: global POSITION/NORMAL/TEXCOORD + one INDICES accessor per primitive.
-  const accessors: Array<Record<string, unknown>> = [
-    { bufferView: 0, componentType: 5126, count: posArr.length / 3, type: "VEC3", min: [Math.min(...positions.filter((_, i) => i % 3 === 0)), 0, Math.min(...positions.filter((_, i) => i % 3 === 2))], max: [Math.max(...positions.filter((_, i) => i % 3 === 0)), wallHeight, Math.max(...positions.filter((_, i) => i % 3 === 2))] },
-    { bufferView: 1, componentType: 5126, count: normArr.length / 3, type: "VEC3" },
-    { bufferView: 2, componentType: 5126, count: uvArr.length / 2, type: "VEC2", min: [0, 0], max: [1, 1] },
-  ];
-  const POS = 0, NORM = 1, UV = 2;
-  const indexAccessors: number[] = [];
-  for (const prim of prims) {
-    indexAccessors.push(accessors.length);
-    accessors.push({
-      bufferView: 3,
-      byteOffset: prim.startIndex * 4,
-      componentType: 5125,
-      count: prim.indexCount,
-      type: "SCALAR",
+  if (planePositionPart && planeNormalPart && planeUvPart && planeIndexPart) {
+    bufferViews.push(
+      { buffer: 0, byteOffset: planePositionPart.offset, byteLength: planePositionPart.length, target: 34962 },
+      { buffer: 0, byteOffset: planeNormalPart.offset, byteLength: planeNormalPart.length, target: 34962 },
+      { buffer: 0, byteOffset: planeUvPart.offset, byteLength: planeUvPart.length, target: 34962 },
+      { buffer: 0, byteOffset: planeIndexPart.offset, byteLength: planeIndexPart.length, target: 34963 },
+    );
+  }
+  const firstImageBufferView = bufferViews.length;
+  for (const imagePart of imageParts) {
+    bufferViews.push({
+      buffer: 0,
+      byteOffset: imagePart.offset,
+      byteLength: imagePart.length,
     });
   }
 
-  // One mesh per primitive so each references its own index accessor.
-  const meshes = prims.map((prim, i) => ({
-    name: prim.name,
-    primitives: [
+  const accessors: Array<Record<string, unknown>> = [
+    {
+      bufferView: 0,
+      componentType: 5126,
+      count: posBuffer.length / 3,
+      type: "VEC3",
+      max: [
+        Math.max(...positions.filter((_, i) => i % 3 === 0)),
+        Math.max(...positions.filter((_, i) => i % 3 === 1)),
+        Math.max(...positions.filter((_, i) => i % 3 === 2)),
+      ],
+      min: [
+        Math.min(...positions.filter((_, i) => i % 3 === 0)),
+        Math.min(...positions.filter((_, i) => i % 3 === 1)),
+        Math.min(...positions.filter((_, i) => i % 3 === 2)),
+      ],
+    },
+    { bufferView: 1, componentType: 5126, count: normBuffer.length / 3, type: "VEC3" },
+    { bufferView: 2, componentType: 5123, count: indexBuffer.length, type: "SCALAR" },
+  ];
+  if (imagePanels.length) {
+    accessors.push(
       {
-        attributes: { POSITION: POS, NORMAL: NORM, TEXCOORD_0: UV },
-        indices: indexAccessors[i],
-        material: prim.material,
-        mode: 4,
+        bufferView: 3,
+        componentType: 5126,
+        count: 4,
+        type: "VEC3",
+        min: [-1.6, -0.9, 0],
+        max: [1.6, 0.9, 0],
       },
-    ],
+      { bufferView: 4, componentType: 5126, count: 4, type: "VEC3" },
+      {
+        bufferView: 5,
+        componentType: 5126,
+        count: 4,
+        type: "VEC2",
+        min: [0, 0],
+        max: [1, 1],
+      },
+      { bufferView: 6, componentType: 5123, count: 6, type: "SCALAR" },
+    );
+  }
+
+  const materials: Array<Record<string, unknown>> = [
+    {
+      name: "NavigationProxy",
+      pbrMetallicRoughness: {
+        baseColorFactor: [0.12, 0.16, 0.15, 1],
+        metallicFactor: 0,
+        roughnessFactor: 0.9,
+      },
+      doubleSided: true,
+    },
+  ];
+  const meshes: Array<Record<string, unknown>> = [
+    {
+      name: "SpaceHull",
+      primitives: [
+        {
+          attributes: { POSITION: 0, NORMAL: 1 },
+          indices: 2,
+          material: 0,
+          mode: 4,
+        },
+      ],
+    },
+  ];
+  const nodes: Array<Record<string, unknown>> = imagePanels.length
+    ? []
+    : [{ mesh: 0, name: "NavigationProxy" }];
+  const images = imagePanels.map((_, index) => ({
+    bufferView: firstImageBufferView + index,
+    mimeType: "image/jpeg",
+    name: `CaptureFrame${String(index + 1).padStart(2, "0")}`,
   }));
+  const textures = imagePanels.map((_, index) => ({ sampler: 0, source: index }));
+
+  for (let index = 0; index < imagePanels.length; index++) {
+    materials.push({
+      name: `CaptureMaterial${String(index + 1).padStart(2, "0")}`,
+      pbrMetallicRoughness: {
+        baseColorTexture: { index },
+        metallicFactor: 0,
+        roughnessFactor: 1,
+      },
+      doubleSided: true,
+      extensions: { KHR_materials_unlit: {} },
+    });
+    meshes.push({
+      name: `CapturePanel${String(index + 1).padStart(2, "0")}`,
+      primitives: [
+        {
+          attributes: { POSITION: 3, NORMAL: 4, TEXCOORD_0: 5 },
+          indices: 6,
+          material: index + 1,
+          mode: 4,
+        },
+      ],
+    });
+    const angle = (index / imagePanels.length) * Math.PI * 2;
+    const yaw = angle + Math.PI;
+    nodes.push({
+      mesh: index + 1,
+      name: `CaptureView${String(index + 1).padStart(2, "0")}`,
+      translation: [Math.sin(angle) * 4.2, 1.55, Math.cos(angle) * 4.2],
+      rotation: [0, Math.sin(yaw / 2), 0, Math.cos(yaw / 2)],
+    });
+  }
 
   const gltf: Record<string, unknown> = {
-    asset: { version: "2.0", generator: "HouseTour Room Builder" },
+    asset: { version: "2.0", generator: "HouseTour Capture Preview Pipeline" },
+    scenes: [{ nodes: nodes.map((_, index) => index) }],
     scene: 0,
-    scenes: [{ nodes: prims.map((_, i) => i) }],
-    nodes: prims.map((prim, i) => ({ mesh: i, name: prim.name })),
+    nodes,
     meshes,
     materials,
-    images,
-    textures,
-    samplers: [{ magFilter: 9729, minFilter: 9987, wrapS: 33071, wrapT: 33071 }],
     accessors,
     bufferViews,
     buffers: [{ byteLength: binLength }],
   };
+  if (imagePanels.length) {
+    gltf.images = images;
+    gltf.textures = textures;
+    gltf.samplers = [{ magFilter: 9729, minFilter: 9987, wrapS: 33071, wrapT: 33071 }];
+    gltf.extensionsUsed = ["KHR_materials_unlit"];
+  }
 
-  // Assemble binary blob
-  const bin = Buffer.alloc(binLength);
-  for (const part of parts) Buffer.from(part.bytes).copy(bin, part.offset);
+  const json = Buffer.from(JSON.stringify(gltf));
+  const jsonPad = pad4(json.length);
+  const jsonChunkLength = json.length + jsonPad;
+  const binChunkLength = binLength;
 
-  return buildGlb(gltf, bin);
+  const totalLength = 12 + 8 + jsonChunkLength + 8 + binChunkLength;
+  const out = Buffer.alloc(totalLength);
+  // header
+  out.writeUInt32LE(0x46546c67, 0); // glTF
+  out.writeUInt32LE(2, 4);
+  out.writeUInt32LE(totalLength, 8);
+  // JSON chunk
+  out.writeUInt32LE(jsonChunkLength, 12);
+  out.writeUInt32LE(0x4e4f534a, 16); // JSON
+  json.copy(out, 20);
+  for (let i = 0; i < jsonPad; i++) out[20 + json.length + i] = 0x20;
+  // BIN chunk
+  const binStart = 20 + jsonChunkLength;
+  out.writeUInt32LE(binChunkLength, binStart);
+  out.writeUInt32LE(0x004e4942, binStart + 4); // BIN
+  for (const part of parts) {
+    Buffer.from(part.bytes).copy(out, binStart + 8 + part.offset);
+  }
+
+  return out;
 }
 
 /** PLY point cloud from capture points + jitter samples for debug export. */
