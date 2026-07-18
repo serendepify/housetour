@@ -3,10 +3,9 @@ import {
   processTourPipeline,
   JobCancelledError,
   type ProcessMode,
-  runModalReconstruction,
-  gatherCaptureFrames,
   uploadDerivedObject,
 } from "@housetour/pipeline";
+import { runModalReconstruction, gatherCaptureFrames } from "@housetour/pipeline/modal-recon";
 import { Worker } from "bullmq";
 
 loadEnv();
